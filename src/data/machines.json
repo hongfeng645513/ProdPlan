@@ -105,42 +105,42 @@
           "T": 1000.0
         },
         {
-          "t": 36.0,
-          "T": 200.0
+          "t": 34.0,
+          "T": 300.0
         }
       ],
       "phases": {
         "heatStart": 0.0,
         "heatEnd": 12.0,
         "holdEnd": 13.0,
-        "unloadAt": 36.0,
-        "unloadTemp": 200.0,
+        "unloadAt": 34.0,
+        "unloadTemp": 300.0,
         "peakTemp": 2800.0,
         "heatDuration": 12.0,
         "holdDuration": 1.0,
-        "coolDuration": 23.0,
-        "cycleDuration": 36.0
+        "coolDuration": 21.0,
+        "cycleDuration": 34.0
       },
       "cooling": {
-        "k": 0.12002,
+        "k": 0.11424,
         "ambient": 20.0,
         "tOff": 13.0,
         "tempAtOff": 2800.0,
-        "rmse": 99.0,
+        "rmse": 113.8,
         "fittedFrom": 14.0,
-        "fittedTo": 36.0,
+        "fittedTo": 34.0,
         "nPoints": 10,
-        "halfLifeHours": 5.78
+        "halfLifeHours": 6.07
       },
       "capacity": {
         "batchInputG": 1320,
         "batchOutputG": 1188.0,
-        "gramsPerHour": 33.0
+        "gramsPerHour": 34.9
       },
       "gaps": [
         {
           "from": 22.0,
-          "to": 36.0
+          "to": 34.0
         }
       ]
     },
@@ -248,42 +248,42 @@
           "T": 1000.0
         },
         {
-          "t": 36.0,
-          "T": 200.0
+          "t": 34.0,
+          "T": 300.0
         }
       ],
       "phases": {
         "heatStart": 0.0,
         "heatEnd": 12.0,
         "holdEnd": 13.0,
-        "unloadAt": 36.0,
-        "unloadTemp": 200.0,
+        "unloadAt": 34.0,
+        "unloadTemp": 300.0,
         "peakTemp": 2800.0,
         "heatDuration": 12.0,
         "holdDuration": 1.0,
-        "coolDuration": 23.0,
-        "cycleDuration": 36.0
+        "coolDuration": 21.0,
+        "cycleDuration": 34.0
       },
       "cooling": {
-        "k": 0.12002,
+        "k": 0.11424,
         "ambient": 20.0,
         "tOff": 13.0,
         "tempAtOff": 2800.0,
-        "rmse": 99.0,
+        "rmse": 113.8,
         "fittedFrom": 14.0,
-        "fittedTo": 36.0,
+        "fittedTo": 34.0,
         "nPoints": 10,
-        "halfLifeHours": 5.78
+        "halfLifeHours": 6.07
       },
       "capacity": {
         "batchInputG": 1320,
         "batchOutputG": 1188.0,
-        "gramsPerHour": 33.0
+        "gramsPerHour": 34.9
       },
       "gaps": [
         {
           "from": 22.0,
-          "to": 36.0
+          "to": 34.0
         }
       ]
     },
@@ -779,42 +779,42 @@
           "T": 1000.0
         },
         {
-          "t": 36.0,
-          "T": 200.0
+          "t": 34.0,
+          "T": 300.0
         }
       ],
       "phases": {
         "heatStart": 0.0,
         "heatEnd": 12.0,
         "holdEnd": 13.0,
-        "unloadAt": 36.0,
-        "unloadTemp": 200.0,
+        "unloadAt": 34.0,
+        "unloadTemp": 300.0,
         "peakTemp": 2800.0,
         "heatDuration": 12.0,
         "holdDuration": 1.0,
-        "coolDuration": 23.0,
-        "cycleDuration": 36.0
+        "coolDuration": 21.0,
+        "cycleDuration": 34.0
       },
       "cooling": {
-        "k": 0.12002,
+        "k": 0.11424,
         "ambient": 20.0,
         "tOff": 13.0,
         "tempAtOff": 2800.0,
-        "rmse": 99.0,
+        "rmse": 113.8,
         "fittedFrom": 14.0,
-        "fittedTo": 36.0,
+        "fittedTo": 34.0,
         "nPoints": 10,
-        "halfLifeHours": 5.78
+        "halfLifeHours": 6.07
       },
       "capacity": {
         "batchInputG": 1980,
         "batchOutputG": 1782.0,
-        "gramsPerHour": 49.5
+        "gramsPerHour": 52.4
       },
       "gaps": [
         {
           "from": 22.0,
-          "to": 36.0
+          "to": 34.0
         }
       ]
     },
@@ -922,44 +922,84 @@
           "T": 1000.0
         },
         {
-          "t": 36.0,
-          "T": 200.0
+          "t": 34.0,
+          "T": 300.0
         }
       ],
       "phases": {
         "heatStart": 0.0,
         "heatEnd": 12.0,
         "holdEnd": 13.0,
-        "unloadAt": 36.0,
-        "unloadTemp": 200.0,
+        "unloadAt": 34.0,
+        "unloadTemp": 300.0,
         "peakTemp": 2800.0,
         "heatDuration": 12.0,
         "holdDuration": 1.0,
-        "coolDuration": 23.0,
-        "cycleDuration": 36.0
+        "coolDuration": 21.0,
+        "cycleDuration": 34.0
       },
       "cooling": {
-        "k": 0.12002,
+        "k": 0.11424,
         "ambient": 20.0,
         "tOff": 13.0,
         "tempAtOff": 2800.0,
-        "rmse": 99.0,
+        "rmse": 113.8,
         "fittedFrom": 14.0,
-        "fittedTo": 36.0,
+        "fittedTo": 34.0,
         "nPoints": 10,
-        "halfLifeHours": 5.78
+        "halfLifeHours": 6.07
       },
       "capacity": {
         "batchInputG": 1980,
         "batchOutputG": 1782.0,
-        "gramsPerHour": 49.5
+        "gramsPerHour": 52.4
       },
       "gaps": [
         {
           "from": 22.0,
-          "to": 36.0
+          "to": 34.0
         }
       ]
     }
-  ]
+  ],
+  "rules": {
+    "raw": [
+      {
+        "text": "Furnace 1 and Furnace 2 cannot heat at the same time",
+        "parsed": true
+      },
+      {
+        "text": "Furnace 5 and Furnace 6 cannot heat at the same time",
+        "parsed": true
+      },
+      {
+        "text": "It takes one hour to load a furnace before heating",
+        "parsed": true
+      },
+      {
+        "text": "It takes one hour to unload a furnace after cooling",
+        "parsed": true
+      }
+    ],
+    "exclusiveHeating": [
+      {
+        "machines": [
+          "furnace-1",
+          "furnace-2"
+        ],
+        "scope": "power",
+        "text": "Furnace 1 and Furnace 2 cannot heat at the same time"
+      },
+      {
+        "machines": [
+          "furnace-5",
+          "furnace-6"
+        ],
+        "scope": "power",
+        "text": "Furnace 5 and Furnace 6 cannot heat at the same time"
+      }
+    ],
+    "loadHours": 1.0,
+    "unloadHours": 1.0
+  }
 }

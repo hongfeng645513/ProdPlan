@@ -4,6 +4,7 @@ import ProcessFlow from './components/ProcessFlow.jsx'
 import MachineCard from './components/MachineCard.jsx'
 import MachineDetail from './components/MachineDetail.jsx'
 import TemperatureChart from './components/TemperatureChart.jsx'
+import Planner from './components/Planner.jsx'
 import { buildCurve, cycleSummary, defaultParams } from './lib/cooling.js'
 import { clock, degrees, grams, num, seriesColor } from './lib/format.js'
 
@@ -128,8 +129,16 @@ export default function App() {
           >
             Compare curves
           </button>
+          <button
+            role="tab"
+            aria-selected={view === 'planner'}
+            className={view === 'planner' ? 'is-active' : ''}
+            onClick={() => setView('planner')}
+          >
+            Plan production
+          </button>
         </div>
-        <div className="filters">
+        <div className="filters" hidden={view === 'planner'}>
           {[
             ['all', 'All'],
             ['carb', 'Carbonization'],
@@ -142,7 +151,9 @@ export default function App() {
         </div>
       </nav>
 
-      {view === 'machines' ? (
+      {view === 'planner' ? (
+        <Planner machines={machines} rules={data.rules} paramsFor={paramsFor} theme={theme} />
+      ) : view === 'machines' ? (
         <>
           <div className="grid">
             {shown.map((m) => (

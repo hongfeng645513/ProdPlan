@@ -14,6 +14,15 @@ Each worksheet in the workbook describes one furnace:
     Time(hours)       | 0 1 2 3 ...
     Temperature(C)    | 20 1000 1450 ...            (last cell may be "Open")
 
+A "Rules" sheet holds one plain-English scheduling constraint per row, e.g.
+
+    Furnace 1 and Furnace 2 cannot heat at the same time
+    It takes one hour to load a furnace before heating
+    It takes one hour to unload a furnace after cooling
+
+Those are parsed into machine-readable form for the planner, and the original
+sentences are carried through so the app can show operators the rule it applied.
+
 The script derives, per machine:
   * the measured temperature curve (time in hours -> degrees C)
   * the process phases: heating -> hold (soak) -> natural cooling -> unload
@@ -124,6 +133,82 @@ def parse_sheet(ws):
         "yield": info.get("yield"),
         "points": points,
         "hasOpenMarker": open_marker,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# the Rules sheet
+# --------------------------------------------------------------------------- #
+
+WORD_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "half": 0.5, "an": 1, "a": 1,
+}
+
+
+def slug(text) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", norm(text)).strip("-")
+
+
+def _duration(text):
+    """Pull a number of hours out of '... one hour ...' / '... 1.5 hours ...'."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:h\b|hour)", text)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"\b(" + "|".join(WORD_NUMBERS) + r")\s+(?:h\b|hour)", text)
+    if m:
+        return float(WORD_NUMBERS[m.group(1)])
+    return None
+
+
+def parse_rules(ws):
+    """Turn the free-text Rules sheet into constraints the planner can apply.
+
+    Anything that isn't recognised is still returned under `raw` (flagged
+    `parsed: False`) so a rule can never be silently dropped: the app lists the
+    unparsed ones so an operator knows the planner is not enforcing them.
+    """
+    sentences = []
+    for row in ws.iter_rows(values_only=True):
+        for cell in row:
+            if isinstance(cell, str) and cell.strip():
+                sentences.append(cell.strip())
+
+    exclusive, load_h, unload_h, raw = [], None, None, []
+
+    for line in sentences:
+        low = norm(line)
+        handled = False
+
+        # "Furnace 1 and Furnace 2 cannot heat at the same time"
+        if re.search(r"\b(cannot|can not|can't|must not|never)\b", low) and "same time" in low:
+            names = re.findall(r"furnace\s*\d+", low)
+            if len(names) >= 2:
+                exclusive.append({
+                    "machines": [slug(n) for n in names],
+                    "scope": "power",       # ramp + soak, i.e. while the element is on
+                    "text": line,
+                })
+                handled = True
+
+        # "It takes one hour to load a furnace before heating"
+        elif "load" in low and "unload" not in low:
+            d = _duration(low)
+            if d is not None:
+                load_h, handled = d, True
+        elif "unload" in low:
+            d = _duration(low)
+            if d is not None:
+                unload_h, handled = d, True
+
+        raw.append({"text": line, "parsed": handled})
+
+    return {
+        "raw": raw,
+        "exclusiveHeating": exclusive,
+        "loadHours": load_h if load_h is not None else 0.0,
+        "unloadHours": unload_h if unload_h is not None else 0.0,
     }
 
 
@@ -262,18 +347,32 @@ def main():
     args = ap.parse_args()
 
     wb = openpyxl.load_workbook(args.workbook, data_only=True)
-    machines = []
+    machines, rules = [], None
     for ws in wb.worksheets:
         raw = parse_sheet(ws)
         if raw is None:
-            print(f"  skipped sheet '{ws.title}' (no machine data)", file=sys.stderr)
+            if norm(ws.title).startswith("rule"):
+                rules = parse_rules(ws)
+                print(f"  read rules from sheet '{ws.title}'", file=sys.stderr)
+            else:
+                print(f"  skipped sheet '{ws.title}' (no machine data)", file=sys.stderr)
             continue
         machines.append(build(raw))
 
     machines.sort(key=lambda m: m["name"])
+    if rules is None:
+        rules = {"raw": [], "exclusiveHeating": [], "loadHours": 0.0, "unloadHours": 0.0}
+
+    known = {m["id"] for m in machines}
+    for group in rules["exclusiveHeating"]:
+        missing = [i for i in group["machines"] if i not in known]
+        if missing:
+            print(f"  WARNING: rule names unknown furnace(s) {missing}: {group['text']}", file=sys.stderr)
+
     payload = {
         "source": Path(args.workbook).name,
         "machines": machines,
+        "rules": rules,
     }
 
     out = Path(args.out)
@@ -281,6 +380,13 @@ def main():
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     print(f"wrote {out} — {len(machines)} machines")
+    print(
+        f"  rules: load {rules['loadHours']} h, unload {rules['unloadHours']} h, "
+        f"{len(rules['exclusiveHeating'])} exclusive-heating group(s)"
+    )
+    for r in rules["raw"]:
+        if not r["parsed"]:
+            print(f"  NOT ENFORCED (unrecognised rule): {r['text']}", file=sys.stderr)
     for m in machines:
         c = m["cooling"]
         print(

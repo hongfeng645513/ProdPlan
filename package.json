@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "data": "python tools/convert_excel.py"
+    "data": "python tools/convert_excel.py",
+    "check": "node tools/check_schedule.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

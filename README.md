@@ -2,7 +2,8 @@
 
 Web tool for planning the GO-film production line: it reads the furnace
 descriptions from `Machine/Machines.xlsx` and presents every machine with its
-specifications, its cycle timing and its temperature curve.
+specifications, its cycle timing and its temperature curve, and plans batches
+across the line from those numbers.
 
 ## The process
 
@@ -41,6 +42,54 @@ In the app, room temperature, `k` and the unload temperature can be adjusted per
 machine; cycle time, batches per day and kg per day recompute live. Adjustments
 are kept in the browser (localStorage) and can be reset to the workbook fit.
 
+## Planning production
+
+The **Plan production** tab schedules real batches across the furnaces. Two
+questions it answers:
+
+- **"What can I make between these two dates?"** — pick a start and an end, and
+  it fills the window and reports the graphite film that comes out.
+- **"When will I have *n* kg of GF?"** — give a start and a target, and it runs
+  until the target is met and reports the finish time.
+
+Either way you choose which furnaces are available, and can seed the plan with
+carbonized material already in stock.
+
+Batches follow the full route: material is carbonized first, and a graphitization
+furnace cannot load until enough carbonized holders exist. Every batch is a whole
+batch — a furnace is not fired part-loaded — so a target is met or slightly
+overshot, never split. Yield is applied once, at graphitization.
+
+### Rules
+
+Constraints live in the `Rules` sheet of the workbook, one plain sentence per
+row, and are parsed rather than hard-coded:
+
+| Sentence in the sheet | What the planner does |
+|---|---|
+| `Furnace 1 and Furnace 2 cannot heat at the same time` | Their power-on windows (ramp + soak) never overlap. Cooling, loading and unloading may. |
+| `It takes one hour to load a furnace before heating` | A 1 h load leg is added ahead of every cycle. |
+| `It takes one hour to unload a furnace after cooling` | A 1 h unload leg closes every cycle. |
+
+A cycle is therefore:
+
+```
+load ──► heat ──► hold ──► cool ──► unload
+└ 1 h ┘  └──── element is ON ────┘         └ 1 h ┘
+```
+
+The app lists every rule it read and flags any it could not interpret, so an
+unparsed rule is visibly *not enforced* rather than silently ignored. Add a rule
+to the sheet, rerun `npm run data`, and the planner picks it up.
+
+Scheduling is greedy: earliest finish wins, ties go to the larger furnace (scarce
+feedstock is worth more in a 3-holder furnace) and then to the furnace that has
+run least, which spreads wear rather than hammering whichever sorts first.
+
+`npm run check` asserts against generated schedules that no paired furnaces heat
+together, no furnace runs two batches at once, graphitization never consumes
+material before it exists, and the totals reconcile.
+
 ## Running it
 
 ```bash
@@ -64,9 +113,10 @@ npm run data           # = python tools/convert_excel.py
 The converter reads one worksheet per machine and expects these row labels:
 `Name`, `Model`, `Function`, `Holders`, `GF size`, `GF per holder(g)`, `Yield`,
 a time row (`Time(hours)`, `0 1 2 …`) and a temperature row. A trailing `Open`
-cell marks the point where the furnace is opened. It writes
-`src/data/machines.json`, deriving the phase boundaries, the Newton cooling fit
-and the batch capacity for each machine.
+cell marks the point where the furnace is opened. The `Rules` sheet is read
+separately, one constraint per row in plain English. It writes
+`src/data/machines.json`, deriving the phase boundaries, the Newton cooling fit,
+the batch capacity for each machine and the parsed rules.
 
 ## Layout
 
@@ -75,24 +125,25 @@ Machine/Machines.xlsx      source of truth for machine properties
 tools/convert_excel.py     workbook -> src/data/machines.json
 src/data/machines.json     generated; committed so the app builds without Python
 src/lib/cooling.js         Newton cooling model, cycle timing, capacity
+src/lib/schedule.js        batch scheduler: rules, two-stage route, two plan modes
 src/lib/format.js          number formatting + the categorical colour palette
-src/components/            chart, machine cards, detail panel, process flow, table
-src/App.jsx                page composition, state, compare view
+src/components/            charts, machine cards, detail panel, planner, Gantt
+src/App.jsx                page composition, state, tab routing
+tools/check_schedule.mjs   headless assertions that a plan obeys the rules
 ```
 
 ## Publishing to GitHub
 
-The repository is initialised locally. To push it:
+`origin` is already set to `https://github.com/hongfeng645513/ProdPlan.git` on
+the local clone. Create the (empty) repository on GitHub, then:
 
 ```bash
 cd C:\AI\ProdPlan
-git remote add origin https://github.com/<you>/ProdPlan.git
-git branch -M main
 git push -u origin main
 ```
 
 ## Roadmap
 
-The natural next step is scheduling: place batches on the furnaces over a
-calendar, respecting the carbonization → graphitization route, the cycle times
-computed here and the number of holders per machine.
+- Shift patterns — loading and unloading currently run 24/7.
+- Maintenance windows and per-furnace downtime.
+- Firm orders with due dates, rather than one aggregate target.
