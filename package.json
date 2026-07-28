@@ -1,0 +1,22 @@
+{
+  "name": "prodplan",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Production planning for GO film carbonization / graphitization furnaces",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "data": "python tools/convert_excel.py"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11",
+    "vite-plugin-singlefile": "^2.0.3"
+  }
+}
