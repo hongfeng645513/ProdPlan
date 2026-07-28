@@ -20,6 +20,8 @@
  *              simply the rest of the recipe from that position onward.
  */
 
+import { num } from './format.js'
+
 /** Hours for Newton cooling to fall from `from` to `target`. */
 function coolingHours(from, target, ambient, k) {
   const excess = from - ambient
@@ -31,9 +33,15 @@ function coolingHours(from, target, ambient, k) {
 
 const EPS = 1e-9
 
-/** The controlled part of the measured curve: load through end of soak. */
+/** The controlled part of the measured curve: ramp through end of soak. */
 function heatingBranch(machine) {
   const end = machine.phases.holdEnd
+  return machine.measured.filter((p) => p.t <= end + EPS)
+}
+
+/** The ramp only, with the plateau trimmed off — this is what we invert. */
+function rampOnly(machine) {
+  const end = machine.phases.heatEnd
   return machine.measured.filter((p) => p.t <= end + EPS)
 }
 
@@ -60,7 +68,7 @@ function measuredAt(points, t) {
  * furnaces' first hour (20 → 1000 °C) is a coarse approximation.
  */
 export function heatingPositionAt(machine, temp) {
-  const pts = heatingBranch(machine)
+  const pts = rampOnly(machine)
   if (temp <= pts[0].T) return { t: pts[0].t, clamped: 'below' }
   const peak = machine.phases.peakTemp
   if (temp > peak + EPS) return { t: null, clamped: 'above' }
@@ -89,7 +97,7 @@ export function heatingPositionAt(machine, temp) {
  * @param {number} opts.step                sampling step for the curve
  * @returns {{points, table, milestones, warnings, setPoint, valid}}
  */
-export function forecast(machine, params, { state, temp, hours = 24, step = 0.25 }) {
+export function forecast(machine, params, { state, temp, hours = 48, step = 0.25 }) {
   const warnings = []
   const milestones = []
   const setPoint = machine.phases.peakTemp
@@ -98,6 +106,8 @@ export function forecast(machine, params, { state, temp, hours = 24, step = 0.25
   // resolved once, not per sample
   const pos = state === 'heating' ? heatingPositionAt(machine, temp) : null
   const ramp = state === 'heating' ? heatingBranch(machine) : null
+  const holdEnd = machine.phases.holdEnd
+  const canCool = params.k > 0
 
   const at = (h) => {
     if (state === 'cooling') {
@@ -107,9 +117,17 @@ export function forecast(machine, params, { state, temp, hours = 24, step = 0.25
     }
     if (pos.t == null) return temp
     const t = pos.t + h
-    // past the end of the ramp the element is still on, so it holds
-    return t >= machine.phases.heatEnd ? setPoint : measuredAt(ramp, t)
+    // Follow the recipe: ramp, then the workbook's soak. After the soak the
+    // element goes off and the furnace cools naturally — a furnace is never
+    // parked at temperature indefinitely.
+    if (t <= holdEnd + EPS) return measuredAt(ramp, t)
+    if (!canCool) return setPoint
+    return ambient + (setPoint - ambient) * Math.exp(-params.k * (t - holdEnd))
   }
+
+  /** true where the value comes from the cooling model rather than the workbook */
+  const isModelled = (h) =>
+    state === 'cooling' ? true : canCool && pos?.t != null && pos.t + h > holdEnd + EPS
 
   let valid = true
 
@@ -145,12 +163,38 @@ export function forecast(machine, params, { state, temp, hours = 24, step = 0.25
           `${Math.round(temp)} °C is below the start of the recipe — treating the furnace as being at the very beginning of its ramp.`,
         )
       }
-      const remaining = machine.phases.heatEnd - pos.t
-      if (remaining > EPS) {
-        milestones.push({ key: 'setpoint', label: `Reaches the set point (${Math.round(setPoint)} °C)`, hours: remaining })
+      const toSetPoint = machine.phases.heatEnd - pos.t
+      milestones.push({
+        key: 'setpoint',
+        label:
+          toSetPoint > EPS
+            ? `Reaches the set point (${Math.round(setPoint)} °C)`
+            : `Already at the set point (${Math.round(setPoint)} °C)`,
+        hours: Math.max(0, toSetPoint),
+      })
+
+      const toHeatOff = holdEnd - pos.t
+      milestones.push({
+        key: 'heatoff',
+        label: `Soak ends, element off (${num(machine.phases.holdDuration, 1)} h soak)`,
+        hours: Math.max(0, toHeatOff),
+      })
+
+      if (!canCool) {
+        warnings.push(
+          'This furnace has no usable cooling fit, so the cool-down after the soak cannot be modelled — the curve stops at the set point.',
+        )
       } else {
-        milestones.push({ key: 'setpoint', label: `Already at the set point (${Math.round(setPoint)} °C)`, hours: 0 })
+        const toUnload = coolingHours(setPoint, params.unloadTemp, ambient, params.k)
+        if (toUnload != null) {
+          milestones.push({
+            key: 'unload',
+            label: `Cool enough to open (${Math.round(params.unloadTemp)} °C)`,
+            hours: Math.max(0, toHeatOff) + toUnload,
+          })
+        }
       }
+
       milestones.push({
         key: 'position',
         label: 'Position on the heating recipe',
@@ -163,7 +207,7 @@ export function forecast(machine, params, { state, temp, hours = 24, step = 0.25
   const points = []
   if (valid) {
     for (let h = 0; h <= hours + EPS; h += step) {
-      points.push({ t: Math.round(h * 1000) / 1000, T: at(h), modeled: state === 'cooling' })
+      points.push({ t: Math.round(h * 1000) / 1000, T: at(h), modeled: isModelled(h) })
     }
   }
 
@@ -173,6 +217,8 @@ export function forecast(machine, params, { state, temp, hours = 24, step = 0.25
     for (let h = 0; h <= Math.round(hours); h++) table.push({ h, T: at(h) })
   }
 
-  milestones.sort((a, b) => a.hours - b.hours)
+  // "position on the recipe" is a place, not a future moment — keep it out of
+  // the chronological ordering and show it first as context.
+  milestones.sort((a, b) => (b.asPosition ? 1 : 0) - (a.asPosition ? 1 : 0) || a.hours - b.hours)
   return { points, table, milestones, warnings, setPoint, valid, ambient }
 }

@@ -103,11 +103,12 @@ The two directions are deliberately not symmetrical:
 | Element | How it is projected |
 |---|---|
 | **Cooling** | Newton's law anchored on the temperature *you type*, not on the workbook's heat-off point. Cooling has no memory of how the furnace got hot, so any starting temperature is valid — including one that never appears in the workbook. |
-| **Heating** | The ramp is *controlled*, so the furnace follows the recipe rather than choosing its own rate. The entered temperature is inverted against the measured ramp to find where on the recipe the furnace is, and the forecast is the rest of that recipe. On reaching the set point it holds there. |
+| **Heating** | The ramp is *controlled*, so the furnace follows the recipe rather than choosing its own rate. The entered temperature is inverted against the measured ramp to find where on the recipe the furnace is, and the forecast is the rest of that recipe — ramp, then the workbook's soak, then the element goes off and it cools naturally. A furnace is never parked at temperature indefinitely, so the curve always comes back down. |
 
-It also reports the milestones an operator actually wants: when a cooling
-furnace passes its unload temperature ("cool enough to open"), when it is within
-10 °C of room, and for heating, when it reaches the set point.
+It also reports the milestones an operator actually wants: when the set point is
+reached, when the soak ends and the element goes off, and when the furnace has
+fallen far enough to open — so a furnace part-way up its ramp answers "when is
+this batch out?", not just "when does it get hot?".
 
 Because the heating ramp is inverted against a curve sampled once per hour,
 resolution between two samples is only linear — on the graphitization furnaces'

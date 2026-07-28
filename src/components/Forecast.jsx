@@ -24,7 +24,7 @@ export default function Forecast({ machines, paramsFor, theme, colorIndex }) {
   const [state, setState] = useState('cooling')
   const [tempText, setTempText] = useState(() => String(machines[0]?.phases.peakTemp ?? 1000))
   const [timeText, setTimeText] = useState(() => toLocalInput(new Date()))
-  const [hoursAhead, setHoursAhead] = useState(24)
+  const [hoursAhead, setHoursAhead] = useState(48)
 
   const machine = machines.find((m) => m.id === machineId) || machines[0]
   const params = paramsFor(machine)
@@ -52,7 +52,9 @@ export default function Forecast({ machines, paramsFor, theme, colorIndex }) {
       <p className="sub">
         Tell it which furnace, how hot it is now and whether the element is on. It projects the
         temperature forward hour by hour. Cooling is modelled from the temperature you enter, so it
-        works from any starting point; heating follows the controlled ramp in the workbook.
+        works from any starting point. Heating follows the controlled ramp in the workbook and then
+        carries on through the soak and the natural cool-down, so it answers “when is this batch
+        out?” rather than stopping at the set point.
       </p>
 
       <div className="planner-controls">
@@ -93,7 +95,7 @@ export default function Forecast({ machines, paramsFor, theme, colorIndex }) {
           </div>
           <p className="control-hint">
             {state === 'heating'
-              ? 'On — the furnace follows its recipe up to the set point, then holds there.'
+              ? `On — ramps to the set point, soaks for ${num(machine.phases.holdDuration, 1)} h, then the element goes off and it cools naturally.`
               : 'Off — natural cooling towards room temperature.'}
           </p>
         </div>
@@ -182,7 +184,7 @@ export default function Forecast({ machines, paramsFor, theme, colorIndex }) {
                 <h3>Projected temperature</h3>
                 <p className="control-hint" style={{ margin: 0 }}>
                   {state === 'heating'
-                    ? 'Solid — the controlled ramp, straight from the workbook.'
+                    ? 'Solid — the controlled ramp and soak, straight from the workbook. Dashed — modelled cooling after the element goes off.'
                     : 'Dashed — modelled cooling, using this furnace’s own constant.'}
                 </p>
               </div>
