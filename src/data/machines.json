@@ -969,6 +969,22 @@
         "parsed": true
       },
       {
+        "text": "Furnace 1 and Furnace 3 cannot heat at the same time",
+        "parsed": true
+      },
+      {
+        "text": "Furnace 2 and Furnace 3 cannot heat at the same time",
+        "parsed": true
+      },
+      {
+        "text": "Furnace 4 and Furnace 6 cannot heat at the same time",
+        "parsed": true
+      },
+      {
+        "text": "Furnace 4 and Furnace 5 cannot heat at the same time",
+        "parsed": true
+      },
+      {
         "text": "Furnace 5 and Furnace 6 cannot heat at the same time",
         "parsed": true
       },
@@ -989,6 +1005,38 @@
         ],
         "scope": "power",
         "text": "Furnace 1 and Furnace 2 cannot heat at the same time"
+      },
+      {
+        "machines": [
+          "furnace-1",
+          "furnace-3"
+        ],
+        "scope": "power",
+        "text": "Furnace 1 and Furnace 3 cannot heat at the same time"
+      },
+      {
+        "machines": [
+          "furnace-2",
+          "furnace-3"
+        ],
+        "scope": "power",
+        "text": "Furnace 2 and Furnace 3 cannot heat at the same time"
+      },
+      {
+        "machines": [
+          "furnace-4",
+          "furnace-6"
+        ],
+        "scope": "power",
+        "text": "Furnace 4 and Furnace 6 cannot heat at the same time"
+      },
+      {
+        "machines": [
+          "furnace-4",
+          "furnace-5"
+        ],
+        "scope": "power",
+        "text": "Furnace 4 and Furnace 5 cannot heat at the same time"
       },
       {
         "machines": [

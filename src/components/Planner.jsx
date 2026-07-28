@@ -366,6 +366,37 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
             </p>
           )}
 
+          {result.groupLoad?.length > 0 && (
+            <div className="rules-applied">
+              <h3>Shared-heating groups</h3>
+              <p className="control-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+                The sheet states the constraint one pair at a time, but those pairs add up to
+                groups. Only one furnace in each group can have its element on at a time, so a
+                group at high load is limiting the line no matter how idle the individual
+                furnaces look.
+              </p>
+              <ul className="group-load">
+                {result.groupLoad.map((g) => (
+                  <li key={g.machines.join()}>
+                    <span className="group-names">{g.names.join(' · ')}</span>
+                    <span className="bar-cell">
+                      <span
+                        className="bar-fill"
+                        style={{ width: `${Math.min(100, g.utilization * 100)}%` }}
+                      />
+                      <span className="bar-text">{num(g.utilization * 100, 0)}% heating</span>
+                    </span>
+                    {!g.complete && (
+                      <em className="group-note">
+                        partial — not every pair in this group is ruled out
+                      </em>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="rules-applied">
             <h3>Rules applied</h3>
             <ul>

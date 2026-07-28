@@ -68,6 +68,48 @@ export function cycleTemplate(machine, params, rules) {
   }
 }
 
+/**
+ * Collapse the pairwise "cannot heat at the same time" rules into the groups
+ * they actually describe.
+ *
+ * The sheet states constraints one pair at a time, but three rules covering
+ * F1/F2, F1/F3 and F2/F3 are really one statement: *those three furnaces share
+ * something* — a supply, a flue, an operator — and only one of them can be on
+ * at a time. Reporting the six pairs back to an operator hides that; reporting
+ * two groups of three explains why the line behaves the way it does.
+ *
+ * Connected components over the exclusivity graph.
+ */
+export function heatingGroups(rules) {
+  const adj = new Map()
+  const touch = (id) => adj.get(id) || adj.set(id, new Set()).get(id)
+  for (const g of rules?.exclusiveHeating || []) {
+    for (const a of g.machines) {
+      touch(a)
+      for (const b of g.machines) if (a !== b) adj.get(a).add(b)
+    }
+  }
+
+  const seen = new Set()
+  const groups = []
+  for (const id of adj.keys()) {
+    if (seen.has(id)) continue
+    const stack = [id]
+    const members = []
+    seen.add(id)
+    while (stack.length) {
+      const cur = stack.pop()
+      members.push(cur)
+      for (const n of adj.get(cur) || []) if (!seen.has(n)) (seen.add(n), stack.push(n))
+    }
+    // A group is only *fully* exclusive if every pair inside it is ruled out;
+    // otherwise it is a chain and some members may still overlap.
+    const complete = members.every((a) => members.every((b) => a === b || adj.get(a).has(b)))
+    groups.push({ machines: members.sort(), complete })
+  }
+  return groups
+}
+
 /** Peers a furnace may not heat alongside, from the Rules sheet. */
 function peersOf(machineId, groups) {
   const peers = new Set()
@@ -282,6 +324,25 @@ export function planProduction({
   const carbUtil = util('carbonization')
   const graphUtil = util('graphitization')
 
+  // How saturated is each shared-power group? With mutually exclusive furnaces
+  // this is usually the real constraint, not the stage utilisation.
+  const groupLoad = heatingGroups(rules)
+    .map((g) => {
+      const members = g.machines.filter((id) => pool.some((m) => m.id === id))
+      if (!members.length) return null
+      const on = batches
+        .filter((b) => members.includes(b.machineId))
+        .reduce((a, b) => a + (b.powerTo - b.powerFrom), 0)
+      return {
+        machines: members,
+        names: members.map((id) => machines.find((m) => m.id === id)?.name || id),
+        complete: g.complete,
+        heatingHours: on,
+        utilization: span > 0 ? on / span : 0,
+      }
+    })
+    .filter(Boolean)
+
   const reachedTarget = mode === 'target' ? gfGrams >= targetGrams - EPS : true
   if (mode === 'target' && !reachedTarget) {
     warnings.push(
@@ -302,6 +363,7 @@ export function planProduction({
     mode,
     batches,
     perMachine,
+    groupLoad,
     warnings,
     finishHours,
     horizonHours: span,

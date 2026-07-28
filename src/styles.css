@@ -989,3 +989,29 @@ button.link:hover {
 .rules-applied li em {
   color: var(--text-muted);
 }
+
+.group-load {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.group-load li {
+  display: grid;
+  grid-template-columns: minmax(150px, 260px) minmax(120px, 320px) auto;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.group-names {
+  color: var(--text-primary);
+}
+
+.group-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
