@@ -5,6 +5,7 @@ import MachineCard from './components/MachineCard.jsx'
 import MachineDetail from './components/MachineDetail.jsx'
 import TemperatureChart from './components/TemperatureChart.jsx'
 import Planner from './components/Planner.jsx'
+import Forecast from './components/Forecast.jsx'
 import { buildCurve, cycleSummary, defaultParams } from './lib/cooling.js'
 import { clock, degrees, grams, num, seriesColor } from './lib/format.js'
 
@@ -137,8 +138,16 @@ export default function App() {
           >
             Plan production
           </button>
+          <button
+            role="tab"
+            aria-selected={view === 'forecast'}
+            className={view === 'forecast' ? 'is-active' : ''}
+            onClick={() => setView('forecast')}
+          >
+            Forecast
+          </button>
         </div>
-        <div className="filters" hidden={view === 'planner'}>
+        <div className="filters" hidden={view === 'planner' || view === 'forecast'}>
           {[
             ['all', 'All'],
             ['carb', 'Carbonization'],
@@ -153,6 +162,8 @@ export default function App() {
 
       {view === 'planner' ? (
         <Planner machines={machines} rules={data.rules} paramsFor={paramsFor} theme={theme} />
+      ) : view === 'forecast' ? (
+        <Forecast machines={machines} paramsFor={paramsFor} theme={theme} colorIndex={colorIndex} />
       ) : view === 'machines' ? (
         <>
           <div className="grid">

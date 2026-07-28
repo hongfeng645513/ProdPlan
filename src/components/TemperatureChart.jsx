@@ -44,6 +44,7 @@ export default function TemperatureChart({
   height = 340,
   showArea = true,
   labelEnds = true,
+  xLabel = 'Time since load (hours)',
 }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(null)
@@ -179,7 +180,7 @@ export default function TemperatureChart({
           </text>
         ))}
         <text x={PAD.left} y={height - 6} className="axis-title">
-          Time since load (hours)
+          {xLabel}
         </text>
         <text
           className="axis-title"

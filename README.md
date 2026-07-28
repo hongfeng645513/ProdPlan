@@ -90,6 +90,29 @@ run least, which spreads wear rather than hammering whichever sorts first.
 together, no furnace runs two batches at once, graphitization never consumes
 material before it exists, and the totals reconcile.
 
+## Forecasting a running furnace
+
+The **Forecast** tab answers a different question from the planner: not "what
+should we run" but "this furnace is hot right now — where will it be each hour
+from here". Pick the furnace, type its current temperature, set the time
+(defaults to now) and say whether the element is on. Out comes an hour-by-hour
+temperature curve and table.
+
+The two directions are deliberately not symmetrical:
+
+| Element | How it is projected |
+|---|---|
+| **Cooling** | Newton's law anchored on the temperature *you type*, not on the workbook's heat-off point. Cooling has no memory of how the furnace got hot, so any starting temperature is valid — including one that never appears in the workbook. |
+| **Heating** | The ramp is *controlled*, so the furnace follows the recipe rather than choosing its own rate. The entered temperature is inverted against the measured ramp to find where on the recipe the furnace is, and the forecast is the rest of that recipe. On reaching the set point it holds there. |
+
+It also reports the milestones an operator actually wants: when a cooling
+furnace passes its unload temperature ("cool enough to open"), when it is within
+10 °C of room, and for heating, when it reaches the set point.
+
+Because the heating ramp is inverted against a curve sampled once per hour,
+resolution between two samples is only linear — on the graphitization furnaces'
+first hour (20 → 1000 °C) that is a coarse approximation.
+
 ## Running it
 
 ```bash
@@ -126,8 +149,9 @@ tools/convert_excel.py     workbook -> src/data/machines.json
 src/data/machines.json     generated; committed so the app builds without Python
 src/lib/cooling.js         Newton cooling model, cycle timing, capacity
 src/lib/schedule.js        batch scheduler: rules, two-stage route, two plan modes
+src/lib/forecast.js        forward projection for a furnace that is already running
 src/lib/format.js          number formatting + the categorical colour palette
-src/components/            charts, machine cards, detail panel, planner, Gantt
+src/components/            charts, machine cards, detail panel, planner, Gantt, forecast
 src/App.jsx                page composition, state, tab routing
 tools/check_schedule.mjs   headless assertions that a plan obeys the rules
 ```
