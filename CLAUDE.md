@@ -130,10 +130,13 @@ rest of the recipe out. Don't "fix" that asymmetry into symmetry.
 
 ## Environment notes
 
-- `_to_delete/` is gitignored scrap — stale `.git` lock files. Something on this
-  machine (sync client or antivirus) periodically leaves a `.git/index.lock`
-  behind that blocks `git add`. If no git process is actually running, move the
-  lock there rather than deleting it.
+- Something on this machine (sync client or antivirus) periodically interrupts
+  git mid-write, leaving a stale `.git/index.lock` that blocks `git add`, and
+  `tmp_obj_*` leftovers beside the real loose objects. Both are safe to delete
+  once you have confirmed no git process is actually running — the `.lock` files
+  are empty, and each `tmp_obj_*` is a hard link to an object that already
+  landed in `.git/objects/`, so removing it leaves the object intact. Verify
+  with `git fsck --full` afterwards.
 - Git reports CRLF warnings on nearly every file; they are noise, not a problem
   to fix.
 - `origin` is `https://github.com/hongfeng645513/ProdPlan.git`, branch `main`.

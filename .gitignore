@@ -6,4 +6,3 @@ dist/
 ~$*.xlsx
 .env
 .env.local
-_to_delete/
