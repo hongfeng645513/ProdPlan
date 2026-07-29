@@ -1101,3 +1101,32 @@ button.link:hover {
   background: var(--surface-1);
   z-index: 1;
 }
+
+/* Loading and data-origin states ------------------------------------------
+   Machine data now arrives over the wire, so "still loading" and "could not
+   load" are states the page has to render rather than assume away. */
+.loading-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 64px 0;
+}
+
+.loading-panel h1 {
+  margin: 0;
+}
+
+.error-text {
+  color: #d1453b;
+}
+
+.notice {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--band-hold);
+  border-left: 3px solid #eda100;
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  margin: 0 0 20px;
+}

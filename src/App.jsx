@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import data from './data/machines.json'
 import ProcessFlow from './components/ProcessFlow.jsx'
 import MachineCard from './components/MachineCard.jsx'
 import MachineDetail from './components/MachineDetail.jsx'
@@ -7,6 +6,7 @@ import TemperatureChart from './components/TemperatureChart.jsx'
 import Planner from './components/Planner.jsx'
 import Forecast from './components/Forecast.jsx'
 import { buildCurve, cycleSummary, defaultParams } from './lib/cooling.js'
+import { loadMachineData } from './lib/dataSource.js'
 import { clock, degrees, grams, num, seriesColor } from './lib/format.js'
 
 const STORE_KEY = 'prodplan.cooling.v1'
@@ -26,19 +26,71 @@ const writeStore = (v) => {
   }
 }
 
+/**
+ * Loader shell.
+ *
+ * Machine data used to be imported at module load, so it was simply *there*.
+ * It now comes over the wire from Postgres, which means it can be slow, and it
+ * can fail. A planner that silently shows nothing is worse than one that says
+ * why, so both states are rendered rather than assumed away.
+ */
 export default function App() {
+  const [theme, setTheme] = useState('light')
+  const [state, setState] = useState(null) // {payload, origin, error}
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+  }, [theme])
+
+  useEffect(() => {
+    let live = true
+    loadMachineData().then((r) => {
+      if (live) setState(r)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  if (!state) {
+    return (
+      <div className="app viz-root">
+        <div className="loading-panel">
+          <h1>ProdPlan</h1>
+          <p className="sub">Loading machine data…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!state.payload?.machines?.length) {
+    return (
+      <div className="app viz-root">
+        <div className="loading-panel">
+          <h1>ProdPlan</h1>
+          <p className="sub error-text">
+            No machine data available{state.error ? ` — ${state.error}` : ''}.
+          </p>
+          <button className="btn" onClick={() => location.reload()}>
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return <Dashboard data={state.payload} origin={state.origin} loadError={state.error} theme={theme} setTheme={setTheme} />
+}
+
+function Dashboard({ data, origin, loadError, theme, setTheme }) {
   const machines = data.machines
   const colorIndex = useMemo(() => Object.fromEntries(machines.map((m, i) => [m.id, i])), [machines])
 
-  const [theme, setTheme] = useState('light')
   const [selected, setSelected] = useState(machines[0]?.id)
   const [view, setView] = useState('machines')
   const [filter, setFilter] = useState('all')
   const [overrides, setOverrides] = useState(readStore)
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-  }, [theme])
   useEffect(() => writeStore(overrides), [overrides])
 
   const paramsFor = (m) => ({ ...defaultParams(m), ...(overrides[m.id] || {}) })
@@ -102,6 +154,13 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {origin === 'bundled' && (
+        <p className="notice">
+          Showing the snapshot bundled at build time{loadError ? ` — ${loadError}` : ''}. Any change
+          made in the database since the last deploy is not reflected here.
+        </p>
+      )}
 
       <ProcessFlow
         machines={machines}
@@ -263,9 +322,13 @@ export default function App() {
       )}
 
       <footer className="footer">
-        Machine properties and temperature curves are read from <code>Machine/{data.source}</code> —
-        rerun <code>npm run data</code> after editing the workbook. Cooling parameters you adjust here are
-        kept in this browser only.
+        {origin === 'api' ? (
+          <>Machine data is read live from the database. </>
+        ) : (
+          <>
+            Machine data is the snapshot in <code>src/data/machines.json</code>. </>
+        )}
+        Cooling parameters you adjust here are kept in this browser only.
       </footer>
     </div>
   )
