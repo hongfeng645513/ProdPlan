@@ -161,7 +161,13 @@ export default function App() {
       </nav>
 
       {view === 'planner' ? (
-        <Planner machines={machines} rules={data.rules} paramsFor={paramsFor} theme={theme} />
+        <Planner
+          machines={machines}
+          rules={data.rules}
+          power={data.power}
+          paramsFor={paramsFor}
+          theme={theme}
+        />
       ) : view === 'forecast' ? (
         <Forecast machines={machines} paramsFor={paramsFor} theme={theme} colorIndex={colorIndex} />
       ) : view === 'machines' ? (

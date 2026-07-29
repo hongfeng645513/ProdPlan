@@ -70,6 +70,10 @@ row, and are parsed rather than hard-coded:
 | `Furnace 1 and Furnace 2 cannot heat at the same time` | Their power-on windows (ramp + soak) never overlap. Cooling, loading and unloading may. |
 | `It takes one hour to load a furnace before heating` | A 1 h load leg is added ahead of every cycle. |
 | `It takes one hour to unload a furnace after cooling` | A 1 h unload leg closes every cycle. |
+| `Cooling system 1 need to run during both heating and cooling for furnace 1, furnace 2 and furnace 3` | Its 41 A is added whenever any of those three is between element-on and cool enough to unload — **once**, not once per furnace. |
+| `Vacuum system 01 needs to run during both heating and cooling for furnace 3` | The same, tied to the single furnace it serves. |
+| `Run coating line as much as possible` | The coating line is assumed up while batches are placed, so it is the furnaces that get pushed later, not the coating line that gets shed. |
+| `Coating line needs 200A ... first 2 hours, then 100A ... if it stops it has to heat up again` | A three-state machine: off, warming at 200 A for 2 h delivering nothing, then running at 100 A. Any dip in headroom below what it is drawing trips it back to off, and the warm-up is paid again. |
 
 A cycle is therefore:
 
@@ -89,6 +93,40 @@ run least, which spreads wear rather than hammering whichever sorts first.
 `npm run check` asserts against generated schedules that no paired furnaces heat
 together, no furnace runs two batches at once, graphitization never consumes
 material before it exists, and the totals reconcile.
+
+### Electricity
+
+The `Electricity` sheet gives a maximum current per piece of plant. That is a
+rating, not a schedule — what the site actually draws depends on which elements
+are on and what they drag along with them. Four kinds of load, and they behave
+differently:
+
+| Load | When it is drawn |
+|---|---|
+| **R&D**, **Facility** | The sheet says `Unknown` for both, so you type them into the planner. Drawn for the whole horizon, under everything else. |
+| **Furnaces** | Rated current on the **heating ramp only**. Nothing during the soak, the natural cool-down, loading or unloading. |
+| **Cooling / vacuum systems** | Follow the furnaces the `Rules` sheet ties them to, from element-on to cool enough to unload. Counted **once** however many of those furnaces are running — one cooling system serving three furnaces is still one motor, and this is the part a per-batch sum gets wrong. |
+| **Coating line** | 200 A for its first two hours, 100 A after; a trip costs the warm-up again. |
+
+You also give the planner a **maximum current for the site**. Batches are then
+pushed later until the heating ramp — plus the support plant it switches on —
+fits under the limit next to everything already booked. The limit is enforced
+while the plan is built, not checked afterwards, so a plan is never produced that
+breaches it.
+
+Two rows on the sheet, **Pre treatment** and **Furnace 7**, have a rating but no
+rule saying when they run, so they are off unless you tick them on.
+
+A rating the sheet leaves blank — currently Furnace 4, 5 and 6 — is counted as
+**0 A** and warned about, never guessed. Guessing would quietly raise the
+ceiling, which is the one thing a current limit exists to stop. Fill those three
+cells in and the plan tightens accordingly.
+
+The coating line appears on the schedule as its own row under the furnaces —
+pale where it is warming up and drawing 200 A without producing, solid where it
+is running at 100 A, and empty where it is down. The rest of the result is a
+stacked load chart against the limit, an hour-by-hour table of total current,
+and a CSV of the same.
 
 ## Forecasting a running furnace
 
@@ -150,6 +188,7 @@ tools/convert_excel.py     workbook -> src/data/machines.json
 src/data/machines.json     generated; committed so the app builds without Python
 src/lib/cooling.js         Newton cooling model, cycle timing, capacity
 src/lib/schedule.js        batch scheduler: rules, two-stage route, two plan modes
+src/lib/power.js           electricity: load profile, shared support plant, current cap
 src/lib/forecast.js        forward projection for a furnace that is already running
 src/lib/format.js          number formatting + the categorical colour palette
 src/components/            charts, machine cards, detail panel, planner, Gantt, forecast

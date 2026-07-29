@@ -59,8 +59,55 @@ export const phaseColor = (key, theme) => {
   return theme === 'dark' ? p.dark : p.light
 }
 
+/**
+ * Load bands for the electricity chart, in the order they stack.
+ *
+ * Deliberately drawn from the same categorical set as the cycle phases, and the
+ * furnace band reuses the heating hue — on both charts orange means "an element
+ * is on", which is the whole point of the current limit.
+ */
+export const LOAD_BANDS = [
+  { key: 'baseline', label: 'R&D + facility', neutral: true },
+  { key: 'support', label: 'Cooling + vacuum', light: '#1baf7a', dark: '#199e70' },
+  { key: 'coating', label: 'Coating line', light: '#eda100', dark: '#c98500' },
+  { key: 'furnace', label: 'Furnaces heating', light: '#eb6834', dark: '#d95926' },
+]
+
+export const loadColor = (key, theme) => {
+  const b = LOAD_BANDS.find((x) => x.key === key)
+  if (!b || b.neutral) return theme === 'dark' ? '#55554f' : '#cbcac0'
+  return theme === 'dark' ? b.dark : b.light
+}
+
 /** Wall-clock date `h` hours after `start` (a Date). */
 export const dateAt = (start, h) => new Date(start.getTime() + h * 3600_000)
+
+export const pad2 = (n) => String(n).padStart(2, '0')
+
+/**
+ * Clock-friendly hour steps, so a wall-clock axis lands on whole hours.
+ * Capped at 12: a step of 24 or more puts every tick at the same hour of the
+ * day, and an axis reading "00 00 00 00" tells you nothing.
+ */
+const HOUR_STEPS = [1, 2, 3, 4, 6, 8, 12]
+
+/**
+ * Ticks for a wall-clock axis. Positions are elapsed hours from t=0, offset so
+ * every tick falls on a whole hour of the day — which is what makes an HH label
+ * honest when the run starts at, say, 10:47.
+ */
+export function clockTicks(xMax, origin, count = 6) {
+  if (!(xMax > 0)) return [0]
+  const step = HOUR_STEPS.find((s) => s >= xMax / count) || 12
+  const startH = origin.getHours() + origin.getMinutes() / 60 + origin.getSeconds() / 3600
+  const first = Math.max(0, Math.ceil(startH / step) * step - startH)
+  const out = []
+  for (let v = first; v <= xMax + 1e-9; v += step) out.push(Number(v.toFixed(6)))
+  return out
+}
+
+/** "14" — the hour of the day `h` hours after `origin`. */
+export const hourOfDay = (origin, h) => pad2(dateAt(origin, h).getHours())
 
 /** "Mon 3 Aug 14:00" */
 export const stamp = (d) =>

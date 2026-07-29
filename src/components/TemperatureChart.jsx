@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { num } from '../lib/format.js'
+import { clockTicks, hourOfDay, num } from '../lib/format.js'
 
 const BASE_PAD = { top: 18, right: 30, bottom: 40, left: 58 }
 
@@ -36,6 +36,9 @@ function niceTicks(max, count = 5) {
 /**
  * Temperature vs time. One or more furnace cycles on a single axis.
  * Solid = measured / controlled heating; dashed = modelled natural cooling.
+ *
+ * Pass `xOrigin` (a Date) to label the x-axis with the hour of the day (HH)
+ * instead of hours elapsed.
  */
 export default function TemperatureChart({
   series,
@@ -45,6 +48,7 @@ export default function TemperatureChart({
   showArea = true,
   labelEnds = true,
   xLabel = 'Time since load (hours)',
+  xOrigin = null,
 }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(null)
@@ -63,10 +67,14 @@ export default function TemperatureChart({
 
   const yTicks = useMemo(() => niceTicks(yMax * 1.06, 5), [yMax])
   const yTop = yTicks[yTicks.length - 1] || 1
-  const xTicks = useMemo(
-    () => niceTicks(xMax, Math.min(8, Math.max(4, Math.round(xMax / 6)))).filter((v) => v <= xMax + 1e-9),
-    [xMax],
-  )
+  const xTicks = useMemo(() => {
+    const count = Math.min(8, Math.max(4, Math.round(xMax / 6)))
+    return xOrigin
+      ? clockTicks(xMax, xOrigin, count)
+      : niceTicks(xMax, count).filter((v) => v <= xMax + 1e-9)
+  }, [xMax, xOrigin])
+
+  const xTickLabel = useCallback((v) => (xOrigin ? hourOfDay(xOrigin, v) : num(v)), [xOrigin])
 
   const plotW = Math.max(10, width - PAD.left - PAD.right)
   const plotH = Math.max(10, height - PAD.top - PAD.bottom)
@@ -176,7 +184,7 @@ export default function TemperatureChart({
         ))}
         {xTicks.map((v) => (
           <text key={v} x={sx(v)} y={PAD.top + plotH + 20} className="tick tick-x">
-            {num(v)}
+            {xTickLabel(v)}
           </text>
         ))}
         <text x={PAD.left} y={height - 6} className="axis-title">

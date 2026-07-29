@@ -431,6 +431,43 @@ h4 {
   fill: var(--text-muted);
   font-size: 11px;
 }
+
+/* The site current limit. Dashed and red because it is the one line on any
+   chart here that must not be crossed — everything else is information. */
+.cap-line {
+  stroke: #e34948;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 4;
+}
+[data-theme='dark'] .cap-line {
+  stroke: #e66767;
+}
+.cap-label {
+  fill: #e34948;
+  font-size: 11px;
+  text-anchor: end;
+}
+[data-theme='dark'] .cap-label {
+  fill: #e66767;
+}
+
+/* Two amp fields side by side — R&D and Facility are always entered together. */
+.amps-pair {
+  display: flex;
+  gap: 10px;
+}
+.amps-pair > span {
+  flex: 1;
+  min-width: 0;
+}
+.amps-pair input {
+  width: 100%;
+}
+
+tr.is-over td,
+tr.is-over th {
+  background: color-mix(in srgb, #e34948 12%, transparent);
+}
 .band-heat {
   fill: var(--band-heat);
 }
@@ -892,6 +929,21 @@ button.link:hover {
 .dayline {
   stroke: var(--axis);
   stroke-width: 1;
+}
+
+/* Separates the furnace rows from the coating line, which is continuous plant
+   rather than a queue of batches. */
+.row-divider {
+  stroke: var(--axis);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+/* The coating line's whole horizon, so a gap reads as "down" rather than as
+   empty space where nothing was scheduled. */
+.coating-trough {
+  fill: var(--chip);
+  opacity: 0.55;
 }
 
 .gantt-seg {

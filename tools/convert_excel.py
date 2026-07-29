@@ -19,9 +19,24 @@ A "Rules" sheet holds one plain-English scheduling constraint per row, e.g.
     Furnace 1 and Furnace 2 cannot heat at the same time
     It takes one hour to load a furnace before heating
     It takes one hour to unload a furnace after cooling
+    Cooling system 1 need to run during both heating and cooling for furnace 1, ...
+    Run coating line as much as possible
+    Coating line needs 200A electricity during first 2 hours, then 100A ...
 
 Those are parsed into machine-readable form for the planner, and the original
 sentences are carried through so the app can show operators the rule it applied.
+
+An "Electricity" sheet lists every piece of plant with its maximum current:
+
+    Coating line   | 250
+    Furnace 1      | 330
+    ...
+    R&D            | Unknown
+    Facility       | Unknown
+
+"Unknown" is not guessed at — it becomes an operator input in the planner.
+A blank is not the same thing: it means the equipment draws nothing the plan
+knows about, and it is carried through as 0 A with a flag so the app can say so.
 
 The script derives, per machine:
   * the measured temperature curve (time in hours -> degrees C)
@@ -176,10 +191,57 @@ def parse_rules(ws):
                 sentences.append(cell.strip())
 
     exclusive, load_h, unload_h, raw = [], None, None, []
+    support, coating = [], {}
 
     for line in sentences:
         low = norm(line)
         handled = False
+
+        # "Cooling system 1 need to run during both heating and cooling for
+        #  furnace 1, furnace 2 and furnace 3"
+        #
+        # Support plant is tied to the furnaces it serves, not to the clock: it
+        # runs from the moment the element comes on until the charge is cool
+        # enough to unload. Heating and cooling are contiguous legs of a cycle,
+        # so "during both" is one window, not two.
+        m = re.match(r"^(cooling system \d+|vacuum system \d+)\b", low)
+        if m and "run" in low and "furnace" in low:
+            served = [slug(n) for n in re.findall(r"furnace\s*\d+", low)]
+            if served:
+                support.append({
+                    "equipment": slug(m.group(1)),
+                    "machines": served,
+                    "from": "heat",      # element on
+                    "to": "cool",        # charge cool enough to unload
+                    "text": line,
+                })
+                handled = True
+            raw.append({"text": line, "parsed": handled})
+            continue
+
+        # "Coating line needs 200A electricity during first 2 hours, then 100A
+        #  for continuous running. If it stops, it has to heat up again ..."
+        if "coating line" in low and re.search(r"\d+\s*a\b", low):
+            amps = [float(a) for a in re.findall(r"(\d+(?:\.\d+)?)\s*a\b", low)]
+            hrs = _duration(low)
+            if len(amps) >= 2 and hrs:
+                coating.update({
+                    "warmupAmps": amps[0],
+                    "warmupHours": hrs,
+                    "runAmps": amps[1],
+                    "restartsWarmup": bool(re.search(r"\b(stop|restart|again)\b", low)),
+                    "profileText": line,
+                })
+                handled = True
+            raw.append({"text": line, "parsed": handled})
+            continue
+
+        # "Run coating line as much as possible"
+        if "coating line" in low and re.search(r"as much as possible|maximi[sz]e", low):
+            coating["priority"] = "high"
+            coating["priorityText"] = line
+            raw.append({"text": line, "parsed": True})
+            continue
 
         # "Furnace 1 and Furnace 2 cannot heat at the same time"
         if re.search(r"\b(cannot|can not|can't|must not|never)\b", low) and "same time" in low:
@@ -207,9 +269,56 @@ def parse_rules(ws):
     return {
         "raw": raw,
         "exclusiveHeating": exclusive,
+        "supportEquipment": support,
+        "coating": coating,
         "loadHours": load_h if load_h is not None else 0.0,
         "unloadHours": unload_h if unload_h is not None else 0.0,
     }
+
+
+# --------------------------------------------------------------------------- #
+# the Electricity sheet
+# --------------------------------------------------------------------------- #
+
+UNKNOWN_WORDS = {"unknown", "n/a", "na", "tbd", "?"}
+
+
+def parse_electricity(ws):
+    """Equipment -> maximum current, straight off the Electricity sheet.
+
+    Three states are kept apart on purpose, because they mean different things
+    to a planner:
+
+      * a number      -- a rating the plan can hold itself to
+      * "Unknown"     -- nobody has measured it; the operator types it in
+      * blank         -- nothing is claimed, so the plan counts 0 A and says so
+
+    Guessing a rating for a blank row would silently loosen the cap, which is
+    the one failure mode a current limit exists to prevent.
+    """
+    items = []
+    for row in ws.iter_rows(values_only=True):
+        if not row or row[0] is None or not str(row[0]).strip():
+            continue
+        name = str(row[0]).strip()
+        if norm(name) in ("equipment", "name", "machine"):
+            continue
+        cell = next((c for c in row[1:] if c is not None), None)
+
+        amps, needs_input, rated = None, False, False
+        if isinstance(cell, (int, float)):
+            amps, rated = float(cell), True
+        elif isinstance(cell, str) and norm(cell) in UNKNOWN_WORDS:
+            needs_input = True
+
+        items.append({
+            "id": slug(name),
+            "name": name,
+            "maxAmps": amps,
+            "rated": rated,          # a number was given on the sheet
+            "needsInput": needs_input,  # sheet says "Unknown" -- ask the operator
+        })
+    return {"equipment": items}
 
 
 # --------------------------------------------------------------------------- #
@@ -347,13 +456,16 @@ def main():
     args = ap.parse_args()
 
     wb = openpyxl.load_workbook(args.workbook, data_only=True)
-    machines, rules = [], None
+    machines, rules, power = [], None, None
     for ws in wb.worksheets:
         raw = parse_sheet(ws)
         if raw is None:
             if norm(ws.title).startswith("rule"):
                 rules = parse_rules(ws)
                 print(f"  read rules from sheet '{ws.title}'", file=sys.stderr)
+            elif norm(ws.title).startswith("electric"):
+                power = parse_electricity(ws)
+                print(f"  read {len(power['equipment'])} equipment ratings from '{ws.title}'", file=sys.stderr)
             else:
                 print(f"  skipped sheet '{ws.title}' (no machine data)", file=sys.stderr)
             continue
@@ -361,18 +473,54 @@ def main():
 
     machines.sort(key=lambda m: m["name"])
     if rules is None:
-        rules = {"raw": [], "exclusiveHeating": [], "loadHours": 0.0, "unloadHours": 0.0}
+        rules = {
+            "raw": [], "exclusiveHeating": [], "supportEquipment": [], "coating": {},
+            "loadHours": 0.0, "unloadHours": 0.0,
+        }
+    if power is None:
+        power = {"equipment": []}
 
     known = {m["id"] for m in machines}
     for group in rules["exclusiveHeating"]:
         missing = [i for i in group["machines"] if i not in known]
         if missing:
             print(f"  WARNING: rule names unknown furnace(s) {missing}: {group['text']}", file=sys.stderr)
+    for s in rules["supportEquipment"]:
+        missing = [i for i in s["machines"] if i not in known]
+        if missing:
+            print(f"  WARNING: rule names unknown furnace(s) {missing}: {s['text']}", file=sys.stderr)
+
+    # Tag each row on the Electricity sheet with the part it plays in a plan, so
+    # the app can group the operator inputs apart from the plant it schedules.
+    support_ids = {s["equipment"] for s in rules["supportEquipment"]}
+    for eq in power["equipment"]:
+        if eq["id"] in known:
+            eq["kind"] = "furnace"
+        elif eq["id"] in support_ids:
+            eq["kind"] = "support"
+        elif "coating" in eq["id"]:
+            eq["kind"] = "coating"
+        elif eq["needsInput"]:
+            eq["kind"] = "input"
+        else:
+            eq["kind"] = "other"   # real plant, but no rule says when it runs
+    rated_ids = {eq["id"] for eq in power["equipment"]}
+    for s in rules["supportEquipment"]:
+        if s["equipment"] not in rated_ids:
+            print(f"  WARNING: no Electricity row for '{s['equipment']}'", file=sys.stderr)
+    for m in machines:
+        eq = next((e for e in power["equipment"] if e["id"] == m["id"]), None)
+        if eq is None or not eq["rated"]:
+            print(f"  WARNING: no current rating for {m['name']} — counted as 0 A", file=sys.stderr)
+
+    power["coating"] = rules["coating"]
+    power["support"] = rules["supportEquipment"]
 
     payload = {
         "source": Path(args.workbook).name,
         "machines": machines,
         "rules": rules,
+        "power": power,
     }
 
     out = Path(args.out)

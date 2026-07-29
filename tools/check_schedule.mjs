@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { defaultParams } from '../src/lib/cooling.js'
 import { planProduction, cycleTemplate, isCarbonization } from '../src/lib/schedule.js'
+import { resolvePower } from '../src/lib/power.js'
 
 const data = JSON.parse(readFileSync(new URL('../src/data/machines.json', import.meta.url)))
 const { machines, rules } = data
@@ -167,6 +168,126 @@ const impossible = planProduction({
 })
 audit('F. unreachable target (F1 alone, no feedstock, 10-day cap)', impossible)
 check('unreachable target is reported, not faked', !impossible.reachedTarget && impossible.totals.gfGrams === 0)
+
+// --------------------------------------------------------------------------
+// Electricity. The point of a current limit is that it is never breached, so
+// these run against the load profile of a real plan rather than the model in
+// isolation.
+console.log('\nG. electricity — the profile must never cross the limit')
+
+const RD = 60
+const FACILITY = 120
+const supportAmps = Object.fromEntries(
+  (data.power?.equipment || []).map((e) => [e.id, e.maxAmps || 0]),
+)
+
+for (const cap of [400, 500, 600, 700, 900, 1500]) {
+  const power = resolvePower(data.power, {
+    maxAmps: cap,
+    baseline: { 'r-d': RD, facility: FACILITY },
+  })
+  const r = planProduction({
+    machines,
+    rules,
+    availableIds: ALL,
+    mode: 'window',
+    horizonHours: 24 * 7,
+    power,
+  })
+  const e = r.electricity
+  const worst = e.steps.reduce((a, s) => Math.max(a, s.total), 0)
+
+  check(
+    `cap ${cap} A — peak ${worst.toFixed(0)} A stays under it`,
+    worst <= cap + 1e-3,
+    `${r.totals.batches} batch(es), ${(r.totals.gfGrams / 1000).toFixed(2)} kg`,
+  )
+
+  // Every band adds up to the total it reports, at every step and every hour.
+  const partsBad = e.steps.find(
+    (s) => Math.abs(s.total - (s.baseline + s.support + s.coating + s.furnace)) > 1e-6,
+  )
+  check(`cap ${cap} A — bands sum to the total`, !partsBad)
+
+  // Shared support plant is counted once. The most any of it can ever add is
+  // the sum of the distinct systems, never a multiple of them.
+  const maxSupport = (data.power?.support || []).reduce(
+    (a, s) => a + (supportAmps[s.equipment] || 0),
+    0,
+  )
+  const doubled = e.steps.find((s) => s.support > maxSupport + 1e-6)
+  check(
+    `cap ${cap} A — support plant never double-counted (max ${maxSupport} A)`,
+    !doubled,
+    doubled ? `${doubled.support} A at ${doubled.from.toFixed(2)} h` : '',
+  )
+
+  // Furnaces draw on the ramp only: at any instant, the furnace band must equal
+  // the sum of the ratings of exactly those furnaces whose heat leg covers it.
+  const bad = e.steps.find((s) => {
+    const mid = (s.from + s.to) / 2
+    const expect = r.batches
+      .filter((b) => {
+        const heat = b.legs.find((l) => l.key === 'heat')
+        return mid >= heat.from - 1e-9 && mid < heat.to - 1e-9
+      })
+      .reduce((a, b) => a + (supportAmps[b.machineId] || 0), 0)
+    return Math.abs(expect - s.furnace) > 1e-6
+  })
+  check(`cap ${cap} A — furnace draw is the heating ramp only`, !bad)
+}
+
+// The coating line, left alone with plenty of headroom, must follow the rule
+// exactly: 200 A for two hours, then 100 A, and never drop.
+{
+  const power = resolvePower(data.power, { maxAmps: 100000, baseline: {} })
+  const r = planProduction({
+    machines,
+    rules,
+    availableIds: ALL,
+    mode: 'window',
+    horizonHours: 24 * 7,
+    power,
+  })
+  const segs = r.electricity.coatingSegs
+  const c = data.power.coating
+  check(
+    `coating warm-up is ${c.warmupHours} h at ${c.warmupAmps} A`,
+    segs[0]?.phase === 'warmup' &&
+      Math.abs(segs[0].to - segs[0].from - c.warmupHours) < EPS &&
+      segs[0].amps === c.warmupAmps,
+  )
+  check(
+    `coating then runs at ${c.runAmps} A continuously`,
+    segs[1]?.phase === 'run' && segs[1].amps === c.runAmps,
+  )
+  check(
+    'coating never drops when there is headroom',
+    Math.abs(r.electricity.coatingUptime - 1) < EPS && r.electricity.coatingTrips.length === 0,
+  )
+}
+
+// A limit under the baseline cannot schedule anything, and must say so rather
+// than quietly planning over it.
+{
+  const power = resolvePower(data.power, {
+    maxAmps: 200,
+    baseline: { 'r-d': RD, facility: FACILITY },
+  })
+  const r = planProduction({
+    machines,
+    rules,
+    availableIds: ALL,
+    mode: 'window',
+    horizonHours: 24 * 3,
+    power,
+  })
+  check(
+    'a limit below the plant rating schedules nothing rather than overshooting',
+    r.totals.batches === 0 && r.electricity.peak <= 200 + 1e-3,
+    `peak ${r.electricity.peak.toFixed(0)} A`,
+  )
+}
 
 console.log(`\n${failures ? `${failures} CHECK(S) FAILED` : 'all checks passed'}`)
 process.exit(failures ? 1 : 0)

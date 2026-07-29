@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PHASES, dateAt, dayStamp, grams, num, phaseColor, stamp } from '../lib/format.js'
+import {
+  PHASES,
+  dateAt,
+  dayStamp,
+  grams,
+  loadColor,
+  num,
+  phaseColor,
+  span,
+  stamp,
+} from '../lib/format.js'
 
 const PAD = { top: 10, right: 16, bottom: 46, left: 92 }
 const ROW = 30
@@ -35,10 +45,15 @@ const tickLabel = (d, step) =>
  * Schedule timeline: one row per furnace, one bar per batch, each bar split
  * into its five cycle legs. Bars are the data; the row label and the legend
  * carry identity so nothing depends on colour alone.
+ *
+ * The coating line gets its own row under the furnaces, ruled off from them
+ * because it is a different kind of thing: not a sequence of batches but a plant
+ * that wants to be up the whole time, and whose gaps are the interesting part.
  */
-export default function GanttChart({ result, startDate, theme, machines }) {
+export default function GanttChart({ result, startDate, theme, machines, coatingName = 'Coating line' }) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(null)
+  const [hoverRun, setHoverRun] = useState(null)
 
   const rows = useMemo(() => {
     const order = machines.map((m) => m.id).filter((id) => result.perMachine.some((r) => r.id === id))
@@ -48,10 +63,38 @@ export default function GanttChart({ result, startDate, theme, machines }) {
     }))
   }, [result, machines])
 
+  /**
+   * Consecutive warm-up and run segments are one visit from the coating line's
+   * point of view — the operator cares where the line went down, not where its
+   * current stepped from 200 A to 100 A.
+   */
+  const coating = useMemo(() => {
+    const segs = result.electricity?.coatingSegs || []
+    const runs = []
+    for (const s of segs) {
+      const last = runs[runs.length - 1]
+      if (last && Math.abs(last.to - s.from) < 1e-6) {
+        last.to = s.to
+        last.segs.push(s)
+      } else {
+        runs.push({ from: s.from, to: s.to, segs: [s] })
+      }
+    }
+    return runs
+  }, [result])
+
+  const hasCoating = coating.length > 0
+  const bodyRows = rows.length + (hasCoating ? 1 : 0)
+  const coatY = PAD.top + rows.length * ROW
+
+  // "Coating line" is longer than any furnace name, so the label gutter grows to
+  // fit it rather than letting it collide with the count on the far left.
+  const L = hasCoating ? 116 : PAD.left
+
   const hours = Math.max(result.horizonHours, result.finishHours, 1)
-  const height = PAD.top + rows.length * ROW + PAD.bottom
-  const plotW = Math.max(10, width - PAD.left - PAD.right)
-  const sx = useCallback((h) => PAD.left + (h / hours) * plotW, [hours, plotW])
+  const height = PAD.top + bodyRows * ROW + PAD.bottom
+  const plotW = Math.max(10, width - L - PAD.right)
+  const sx = useCallback((h) => L + (h / hours) * plotW, [hours, plotW, L])
 
   const step = tickStep(hours, plotW)
   const ticks = []
@@ -73,22 +116,22 @@ export default function GanttChart({ result, startDate, theme, machines }) {
         height={height}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Production schedule timeline, one row per furnace"
-        onMouseLeave={() => setHover(null)}
+        aria-label="Production schedule timeline, one row per furnace plus the coating line"
+        onMouseLeave={() => (setHover(null), setHoverRun(null))}
       >
         {ticks.map((h) => (
-          <line key={`g${h}`} x1={sx(h)} x2={sx(h)} y1={PAD.top} y2={PAD.top + rows.length * ROW} className="gridline" />
+          <line key={`g${h}`} x1={sx(h)} x2={sx(h)} y1={PAD.top} y2={PAD.top + bodyRows * ROW} className="gridline" />
         ))}
         {dayLines.map((h) => (
-          <line key={`d${h}`} x1={sx(h)} x2={sx(h)} y1={PAD.top} y2={PAD.top + rows.length * ROW} className="dayline" />
+          <line key={`d${h}`} x1={sx(h)} x2={sx(h)} y1={PAD.top} y2={PAD.top + bodyRows * ROW} className="dayline" />
         ))}
 
         {rows.map((r, i) => {
           const y = PAD.top + i * ROW
           return (
             <g key={r.id}>
-              {i % 2 === 1 && <rect x={PAD.left} y={y} width={plotW} height={ROW} className="row-stripe" />}
-              <text x={PAD.left - 10} y={y + ROW / 2 + 4} className="gantt-row-label" textAnchor="end">
+              {i % 2 === 1 && <rect x={L} y={y} width={plotW} height={ROW} className="row-stripe" />}
+              <text x={L - 10} y={y + ROW / 2 + 4} className="gantt-row-label" textAnchor="end">
                 {r.name}
               </text>
               <text x={4} y={y + ROW / 2 + 4} className="gantt-row-meta">
@@ -130,19 +173,70 @@ export default function GanttChart({ result, startDate, theme, machines }) {
           )
         })}
 
+        {hasCoating && (
+          <g>
+            {/* ruled off from the furnaces: continuous plant, not a batch queue */}
+            <line x1={L} x2={L + plotW} y1={coatY} y2={coatY} className="row-divider" />
+            <text x={L - 10} y={coatY + ROW / 2 + 4} className="gantt-row-label" textAnchor="end">
+              {coatingName}
+            </text>
+            <text x={4} y={coatY + ROW / 2 + 4} className="gantt-row-meta">
+              {coating.length}×
+            </text>
+
+            {/* the whole horizon as a faint trough, so the gaps read as gaps */}
+            <rect
+              x={L}
+              y={coatY + (ROW - BAR) / 2}
+              width={plotW}
+              height={BAR}
+              rx={3}
+              className="coating-trough"
+            />
+
+            {coating.map((run, i) => (
+              <g key={i}>
+                {run.segs.map((s, j) => (
+                  <rect
+                    key={j}
+                    x={sx(s.from)}
+                    y={coatY + (ROW - BAR) / 2}
+                    width={Math.max(1.2, sx(s.to) - sx(s.from) - (j === run.segs.length - 1 ? 1 : 0))}
+                    height={BAR}
+                    rx={3}
+                    fill={loadColor('coating', theme)}
+                    // warm-up draws double and makes nothing — half opacity says
+                    // "on but not yet producing" without inventing a second hue
+                    opacity={s.phase === 'warmup' ? 0.45 : 1}
+                    className={`gantt-seg${hoverRun === i ? ' is-hover' : ''}`}
+                  />
+                ))}
+                <rect
+                  x={sx(run.from)}
+                  y={coatY + 2}
+                  width={Math.max(6, sx(run.to) - sx(run.from))}
+                  height={ROW - 4}
+                  fill="transparent"
+                  onMouseEnter={() => (setHoverRun(i), setHover(null))}
+                />
+              </g>
+            ))}
+          </g>
+        )}
+
         <line
-          x1={PAD.left}
-          x2={PAD.left + plotW}
-          y1={PAD.top + rows.length * ROW}
-          y2={PAD.top + rows.length * ROW}
+          x1={L}
+          x2={L + plotW}
+          y1={PAD.top + bodyRows * ROW}
+          y2={PAD.top + bodyRows * ROW}
           className="axis"
         />
         {ticks.map((h) => (
-          <text key={`t${h}`} x={sx(h)} y={PAD.top + rows.length * ROW + 16} className="tick tick-x">
+          <text key={`t${h}`} x={sx(h)} y={PAD.top + bodyRows * ROW + 16} className="tick tick-x">
             {tickLabel(dateAt(startDate, h), step)}
           </text>
         ))}
-        <text x={PAD.left} y={height - 6} className="axis-title">
+        <text x={L} y={height - 6} className="axis-title">
           {`Schedule from ${stamp(startDate)} · ${num(hours, 0)} h total`}
         </text>
       </svg>
@@ -179,6 +273,45 @@ export default function GanttChart({ result, startDate, theme, machines }) {
             <span className="tooltip-value">
               {hover.stage === 'graphitization' ? `${grams(hover.gfGrams)} GF` : 'to stock'}
             </span>
+          </div>
+        </div>
+      )}
+
+      {hoverRun != null && coating[hoverRun] && (
+        <div
+          className="tooltip"
+          style={{
+            left: `${Math.min(Math.max(sx((coating[hoverRun].from + coating[hoverRun].to) / 2), 90), width - 110)}px`,
+            top: `${coatY + ROW + 6}px`,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className="tooltip-title">
+            {coatingName} · run {hoverRun + 1} of {coating.length}
+          </div>
+          <div className="tooltip-row">
+            <span className="tooltip-label">Up</span>
+            <span className="tooltip-value">{stamp(dateAt(startDate, coating[hoverRun].from))}</span>
+          </div>
+          <div className="tooltip-row">
+            <span className="tooltip-label">Down</span>
+            <span className="tooltip-value">{stamp(dateAt(startDate, coating[hoverRun].to))}</span>
+          </div>
+          {coating[hoverRun].segs.map((s, j) => (
+            <div className="tooltip-row" key={j}>
+              <span
+                className="key"
+                style={{ background: loadColor('coating', theme), opacity: s.phase === 'warmup' ? 0.45 : 1 }}
+              />
+              <span className="tooltip-label">
+                {s.phase === 'warmup' ? 'Warm-up' : 'Running'} at {num(s.amps)} A
+              </span>
+              <span className="tooltip-value">{num(s.to - s.from, 1)} h</span>
+            </div>
+          ))}
+          <div className="tooltip-row">
+            <span className="tooltip-label">This run</span>
+            <span className="tooltip-value">{span(coating[hoverRun].to - coating[hoverRun].from)}</span>
           </div>
         </div>
       )}

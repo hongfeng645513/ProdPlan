@@ -193,7 +193,8 @@ export default function Forecast({ machines, paramsFor, theme, colorIndex }) {
                 height={320}
                 showArea
                 labelEnds={false}
-                xLabel={`Hours from ${stamp(startDate)}`}
+                xOrigin={startDate}
+                xLabel={`Hour of day (HH) — from ${stamp(startDate)}`}
               />
 
               <div className="table-wrap">

@@ -18,6 +18,9 @@
  * Constraints come from the workbook's Rules sheet, not from constants here:
  *   - pairs of furnaces that may not have their elements on at the same time
  *   - the load time before heating and the unload time after cooling
+ *   - the site current limit, if one is given: a batch is pushed later until its
+ *     heating ramp, and the cooling and vacuum plant it drags along, fit under
+ *     the cap next to everything already booked (see power.js)
  *
  * Scheduling is greedy, earliest-completion-first. That is not provably optimal,
  * but with six furnaces and a hard two-stage dependency it lands on the same
@@ -26,8 +29,11 @@
  */
 
 import { defaultParams, hoursToTemp } from './cooling.js'
+import { createLedger, simulate } from './power.js'
 
 const EPS = 1e-6
+
+const num0 = (v) => Math.round(v).toLocaleString('en-US')
 
 export const isCarbonization = (m) => m.function.toLowerCase().startsWith('carb')
 
@@ -170,6 +176,7 @@ function wipReadyAt(need, arrivals, consumed, from) {
  * @param {number}   opts.startWipHolders carbonized holders already in stock at t=0
  * @param {boolean}  opts.chain           carbonization must feed graphitization
  * @param {number}   opts.maxHours        hard stop so 'target' can't run away
+ * @param {object}   opts.power           resolved electricity model, or null for no cap
  */
 export function planProduction({
   machines,
@@ -182,6 +189,7 @@ export function planProduction({
   startWipHolders = 0,
   chain = true,
   maxHours = 24 * 365,
+  power = null,
 }) {
   const pool = machines.filter((m) => availableIds.includes(m.id))
   const templates = new Map(pool.map((m) => [m.id, cycleTemplate(m, paramsFor(m), rules)]))
@@ -211,47 +219,87 @@ export function planProduction({
   let gfGrams = 0
   let seq = 0
 
+  // The current limit is booked against as batches are placed, so a furnace is
+  // pushed later rather than the plan being checked after the fact and failing.
+  const capped = !!power && Number.isFinite(power.capAmps)
+  const ledger = power ? createLedger(power, mode === 'window' ? horizonHours : maxHours) : null
+  let coatingSacrificed = 0
+
+  /**
+   * Settle a start time against both constraints at once. Clearing the current
+   * limit can move a batch onto a peer's heating window and vice versa, so the
+   * two are alternated until neither wants to move it further.
+   */
+  const settle = (from, m, tpl, ignoreCoating) => {
+    let est = from
+    for (let i = 0; i < 40; i++) {
+      const afterPeers = clearExclusivity(
+        est,
+        tpl,
+        peersOf(m.id, rules?.exclusiveHeating),
+        windowsByMachine,
+      )
+      const afterPower = capped
+        ? ledger.earliestStart(afterPeers, m, tpl, ceiling, ignoreCoating)
+        : afterPeers
+      if (afterPower == null) return null
+      if (afterPower <= est + EPS) return afterPower
+      est = afterPower
+    }
+    return null
+  }
+
   for (let guard = 0; guard < 2000; guard++) {
     let best = null
 
-    for (const m of pool) {
-      const tpl = templates.get(m.id)
-      if (tpl.total <= 0) continue
+    // Pass 1 keeps the coating line up, which is what "run it as much as
+    // possible" asks for. Only if nothing at all can be placed that way does
+    // pass 2 let a batch push it over — the rule allows the break, it just
+    // makes it a last resort.
+    for (const relax of [false, true]) {
+      for (const m of pool) {
+        const tpl = templates.get(m.id)
+        if (tpl.total <= 0) continue
 
-      let est = freeAt.get(m.id)
+        let est = freeAt.get(m.id)
 
-      // graphitization can't start loading before its feedstock exists
-      if (chain && !isCarbonization(m)) {
-        const ready = wipReadyAt(m.holders, arrivals, consumedHolders, est)
-        if (ready == null) continue
-        est = ready
+        // graphitization can't start loading before its feedstock exists
+        if (chain && !isCarbonization(m)) {
+          const ready = wipReadyAt(m.holders, arrivals, consumedHolders, est)
+          if (ready == null) continue
+          est = ready
+        }
+
+        const settled = settle(est, m, tpl, relax)
+        if (settled == null) continue
+        est = settled
+
+        const end = est + tpl.total
+        if (end > ceiling + EPS) continue
+
+        const cand = { machine: m, tpl, start: est, end, brokeCoating: relax }
+        // Earliest finish wins. On a tie, prefer the bigger furnace — feedstock
+        // is usually the scarce thing, so the same holders are worth more in a
+        // 3-holder furnace — and then the furnace that has run least, which
+        // spreads wear instead of hammering whichever one sorts first.
+        if (
+          !best ||
+          (Math.abs(cand.end - best.end) > EPS
+            ? cand.end < best.end
+            : cand.machine.holders !== best.machine.holders
+              ? cand.machine.holders > best.machine.holders
+              : batchCount.get(cand.machine.id) !== batchCount.get(best.machine.id)
+                ? batchCount.get(cand.machine.id) < batchCount.get(best.machine.id)
+                : cand.start < best.start - EPS)
+        ) {
+          best = cand
+        }
       }
-
-      est = clearExclusivity(est, tpl, peersOf(m.id, rules?.exclusiveHeating), windowsByMachine)
-
-      const end = est + tpl.total
-      if (end > ceiling + EPS) continue
-
-      const cand = { machine: m, tpl, start: est, end }
-      // Earliest finish wins. On a tie, prefer the bigger furnace — feedstock is
-      // usually the scarce thing, so the same holders are worth more in a
-      // 3-holder furnace — and then the furnace that has run least, which
-      // spreads wear instead of hammering whichever one sorts first.
-      if (
-        !best ||
-        (Math.abs(cand.end - best.end) > EPS
-          ? cand.end < best.end
-          : cand.machine.holders !== best.machine.holders
-            ? cand.machine.holders > best.machine.holders
-            : batchCount.get(cand.machine.id) !== batchCount.get(best.machine.id)
-              ? batchCount.get(cand.machine.id) < batchCount.get(best.machine.id)
-              : cand.start < best.start - EPS)
-      ) {
-        best = cand
-      }
+      if (best) break // pass 1 found something; never fall through to the relaxed pass
     }
 
     if (!best) break
+    if (best.brokeCoating) coatingSacrificed++
 
     const { machine: m, tpl, start, end } = best
     const carbBatch = isCarbonization(m)
@@ -278,6 +326,7 @@ export function planProduction({
     freeAt.set(m.id, end)
     batchCount.set(m.id, batchCount.get(m.id) + 1)
     windowsByMachine.get(m.id).push({ from: start + tpl.powerFrom, to: start + tpl.powerTo })
+    if (ledger) ledger.commit(m, tpl, start)
 
     if (carbBatch) {
       arrivals.push({ t: end, holders: m.holders })
@@ -359,11 +408,42 @@ export function planProduction({
     if (!r.parsed) warnings.push(`Rule not enforced (not understood by the parser): "${r.text}"`)
   }
 
+  // The load timeline is rebuilt from the finished plan rather than read off the
+  // ledger, because only now is it known when the coating line actually had the
+  // headroom to be up.
+  const electricity = power
+    ? simulate({ batches, machines: pool, templates, resolved: power, horizonHours: span })
+    : null
+
+  if (electricity) {
+    if (power.unrated.length) {
+      warnings.push(
+        `No current rating on the Electricity sheet for ${power.unrated.join(', ')} — counted as 0 A, so the real draw is higher than shown.`,
+      )
+    }
+    if (coatingSacrificed > 0) {
+      warnings.push(
+        `${coatingSacrificed} batch(es) could only be scheduled by letting the coating line drop — it restarts with a ${num0(power.coating.warmupHours)} h, ${num0(power.coating.warmupAmps)} A warm-up each time.`,
+      )
+    }
+    if (electricity.coatingTrips.length && !coatingSacrificed) {
+      warnings.push(
+        `The coating line trips ${electricity.coatingTrips.length} time(s) when furnace load peaks; each restart costs a ${num0(power.coating.warmupHours)} h warm-up at ${num0(power.coating.warmupAmps)} A.`,
+      )
+    }
+    if (electricity.overCap) {
+      warnings.push(
+        `Draw exceeds the ${num0(power.capAmps)} A limit for ${num0(electricity.overCapHours)} h — the baseline alone may already be over it.`,
+      )
+    }
+  }
+
   return {
     mode,
     batches,
     perMachine,
     groupLoad,
+    electricity,
     warnings,
     finishHours,
     horizonHours: span,

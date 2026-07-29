@@ -995,6 +995,30 @@
       {
         "text": "It takes one hour to unload a furnace after cooling",
         "parsed": true
+      },
+      {
+        "text": "Cooling system 1 need to run during both heating and cooling for furnace 1, furnace 2 and furnace 3",
+        "parsed": true
+      },
+      {
+        "text": "Cooling system 2 needs to run during both heating and cooling for furnace 4, furnace 5 and furnace 6",
+        "parsed": true
+      },
+      {
+        "text": "Vacuum system 01 needs to run during both heating and cooling for furnace 3",
+        "parsed": true
+      },
+      {
+        "text": "Vacuum system 02 needs to run during both heating and cooling for furnace 4",
+        "parsed": true
+      },
+      {
+        "text": "Run coating line as much as possible",
+        "parsed": true
+      },
+      {
+        "text": "Coating line needs 200A electricity during first 2 hours, then 100A for continuous running. If it stops, then it has to heat up again with 200A for 2 hours",
+        "parsed": true
       }
     ],
     "exclusiveHeating": [
@@ -1047,7 +1071,233 @@
         "text": "Furnace 5 and Furnace 6 cannot heat at the same time"
       }
     ],
+    "supportEquipment": [
+      {
+        "equipment": "cooling-system-1",
+        "machines": [
+          "furnace-1",
+          "furnace-2",
+          "furnace-3"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Cooling system 1 need to run during both heating and cooling for furnace 1, furnace 2 and furnace 3"
+      },
+      {
+        "equipment": "cooling-system-2",
+        "machines": [
+          "furnace-4",
+          "furnace-5",
+          "furnace-6"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Cooling system 2 needs to run during both heating and cooling for furnace 4, furnace 5 and furnace 6"
+      },
+      {
+        "equipment": "vacuum-system-01",
+        "machines": [
+          "furnace-3"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Vacuum system 01 needs to run during both heating and cooling for furnace 3"
+      },
+      {
+        "equipment": "vacuum-system-02",
+        "machines": [
+          "furnace-4"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Vacuum system 02 needs to run during both heating and cooling for furnace 4"
+      }
+    ],
+    "coating": {
+      "priority": "high",
+      "priorityText": "Run coating line as much as possible",
+      "warmupAmps": 200.0,
+      "warmupHours": 2.0,
+      "runAmps": 100.0,
+      "restartsWarmup": true,
+      "profileText": "Coating line needs 200A electricity during first 2 hours, then 100A for continuous running. If it stops, then it has to heat up again with 200A for 2 hours"
+    },
     "loadHours": 1.0,
     "unloadHours": 1.0
+  },
+  "power": {
+    "equipment": [
+      {
+        "id": "coating-line",
+        "name": "Coating line",
+        "maxAmps": 250.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "coating"
+      },
+      {
+        "id": "furnace-1",
+        "name": "Furnace 1",
+        "maxAmps": 330.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "furnace-2",
+        "name": "Furnace 2",
+        "maxAmps": 330.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "furnace-3",
+        "name": "Furnace 3",
+        "maxAmps": 150.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "vacuum-system-01",
+        "name": "Vacuum system 01",
+        "maxAmps": 40.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "support"
+      },
+      {
+        "id": "vacuum-system-02",
+        "name": "Vacuum system 02",
+        "maxAmps": 40.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "support"
+      },
+      {
+        "id": "furnace-4",
+        "name": "Furnace 4",
+        "maxAmps": null,
+        "rated": false,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "furnace-5",
+        "name": "Furnace 5",
+        "maxAmps": null,
+        "rated": false,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "furnace-6",
+        "name": "Furnace 6",
+        "maxAmps": null,
+        "rated": false,
+        "needsInput": false,
+        "kind": "furnace"
+      },
+      {
+        "id": "furnace-7",
+        "name": "Furnace 7",
+        "maxAmps": 82.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "other"
+      },
+      {
+        "id": "cooling-system-1",
+        "name": "Cooling system 1",
+        "maxAmps": 41.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "support"
+      },
+      {
+        "id": "cooling-system-2",
+        "name": "Cooling system 2",
+        "maxAmps": 45.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "support"
+      },
+      {
+        "id": "pre-treatment",
+        "name": "Pre treatment",
+        "maxAmps": 45.0,
+        "rated": true,
+        "needsInput": false,
+        "kind": "other"
+      },
+      {
+        "id": "r-d",
+        "name": "R&D",
+        "maxAmps": null,
+        "rated": false,
+        "needsInput": true,
+        "kind": "input"
+      },
+      {
+        "id": "facility",
+        "name": "Facility",
+        "maxAmps": null,
+        "rated": false,
+        "needsInput": true,
+        "kind": "input"
+      }
+    ],
+    "coating": {
+      "priority": "high",
+      "priorityText": "Run coating line as much as possible",
+      "warmupAmps": 200.0,
+      "warmupHours": 2.0,
+      "runAmps": 100.0,
+      "restartsWarmup": true,
+      "profileText": "Coating line needs 200A electricity during first 2 hours, then 100A for continuous running. If it stops, then it has to heat up again with 200A for 2 hours"
+    },
+    "support": [
+      {
+        "equipment": "cooling-system-1",
+        "machines": [
+          "furnace-1",
+          "furnace-2",
+          "furnace-3"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Cooling system 1 need to run during both heating and cooling for furnace 1, furnace 2 and furnace 3"
+      },
+      {
+        "equipment": "cooling-system-2",
+        "machines": [
+          "furnace-4",
+          "furnace-5",
+          "furnace-6"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Cooling system 2 needs to run during both heating and cooling for furnace 4, furnace 5 and furnace 6"
+      },
+      {
+        "equipment": "vacuum-system-01",
+        "machines": [
+          "furnace-3"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Vacuum system 01 needs to run during both heating and cooling for furnace 3"
+      },
+      {
+        "equipment": "vacuum-system-02",
+        "machines": [
+          "furnace-4"
+        ],
+        "from": "heat",
+        "to": "cool",
+        "text": "Vacuum system 02 needs to run during both heating and cooling for furnace 4"
+      }
+    ]
   }
 }

@@ -1,7 +1,19 @@
 import { useMemo, useState } from 'react'
 import GanttChart from './GanttChart.jsx'
+import PowerChart from './PowerChart.jsx'
 import { planProduction, isCarbonization } from '../lib/schedule.js'
-import { PHASES, dateAt, grams, num, phaseColor, span, stamp } from '../lib/format.js'
+import { resolvePower } from '../lib/power.js'
+import {
+  LOAD_BANDS,
+  PHASES,
+  dateAt,
+  grams,
+  loadColor,
+  num,
+  phaseColor,
+  span,
+  stamp,
+} from '../lib/format.js'
 
 /** <input type="datetime-local"> speaks local wall-clock text, not Date. */
 const toLocalInput = (d) => {
@@ -38,6 +50,42 @@ function csv(result, startDate) {
   return [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
 }
 
+/** Hour-by-hour current draw, for whoever has to answer to the grid operator. */
+function powerCsv(electricity, startDate) {
+  const head = [
+    'Hour',
+    'Clock',
+    'R&D + facility (A)',
+    'Cooling + vacuum (A)',
+    'Coating line (A)',
+    'Furnaces heating (A)',
+    'Total (A)',
+    'Peak in hour (A)',
+    'Furnaces on',
+  ]
+  const rows = electricity.hourly.map((h) => [
+    `+${h.hour} h`,
+    stamp(dateAt(startDate, h.from)),
+    Math.round(h.baseline),
+    Math.round(h.support),
+    Math.round(h.coating),
+    Math.round(h.furnace),
+    Math.round(h.total),
+    Math.round(h.peak),
+    h.furnacesOn.join(' + ') || '—',
+  ])
+  return [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+}
+
+const download = (text, name) => {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function Stat({ label, value, sub, tone }) {
   return (
     <div className={`stat${tone ? ` stat-${tone}` : ''}`}>
@@ -48,7 +96,7 @@ function Stat({ label, value, sub, tone }) {
   )
 }
 
-export default function Planner({ machines, rules, paramsFor, theme }) {
+export default function Planner({ machines, rules, power: powerData, paramsFor, theme }) {
   const [mode, setMode] = useState('window')
   const [startText, setStartText] = useState(() => toLocalInput(nextHour()))
   const [endText, setEndText] = useState(() => toLocalInput(new Date(nextHour().getTime() + 7 * 864e5)))
@@ -56,11 +104,38 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
   const [stockHolders, setStockHolders] = useState(0)
   const [available, setAvailable] = useState(() => machines.map((m) => m.id))
   const [showAll, setShowAll] = useState(false)
+  const [showAllHours, setShowAllHours] = useState(false)
+
+  // Electricity — the two "Unknown" rows on the sheet and the site limit are
+  // operator inputs, because nothing in the workbook can supply them.
+  const [maxAmps, setMaxAmps] = useState(1000)
+  const [rdAmps, setRdAmps] = useState(0)
+  const [facilityAmps, setFacilityAmps] = useState(0)
+  const [extras, setExtras] = useState({})
+  const [coatingOn, setCoatingOn] = useState(true)
+
+  const extraEquipment = useMemo(
+    () => (powerData?.equipment || []).filter((e) => e.kind === 'other'),
+    [powerData],
+  )
 
   const startDate = fromLocalInput(startText)
   const endDate = fromLocalInput(endText)
   const horizonHours = startDate && endDate ? (endDate - startDate) / 3600_000 : 0
   const windowValid = mode !== 'window' || horizonHours > 0
+
+  const resolved = useMemo(
+    () =>
+      powerData
+        ? resolvePower(powerData, {
+            maxAmps: Math.max(0, maxAmps),
+            baseline: { 'r-d': Math.max(0, rdAmps), facility: Math.max(0, facilityAmps) },
+            extras,
+            coating: coatingOn,
+          })
+        : null,
+    [powerData, maxAmps, rdAmps, facilityAmps, extras, coatingOn],
+  )
 
   const result = useMemo(() => {
     if (!startDate || !windowValid) return null
@@ -74,27 +149,23 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
       targetGrams: Math.max(0, targetKg) * 1000,
       startWipHolders: Math.max(0, stockHolders),
       chain: true,
+      power: resolved,
     })
     // paramsFor is rebuilt on every render by App; the cooling overrides it
     // closes over are what actually matter, so key on those via machines.
-  }, [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, paramsFor])
+  }, [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, paramsFor, resolved])
 
   const toggle = (id) =>
     setAvailable((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setGroup = (pred) => setAvailable(machines.filter(pred).map((m) => m.id))
 
-  const download = () => {
-    const blob = new Blob([csv(result, startDate)], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `prodplan-schedule-${toLocalInput(startDate).replace(/[:T]/g, '-')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const stampFile = () => toLocalInput(startDate).replace(/[:T]/g, '-')
 
   const finishDate = result && startDate ? dateAt(startDate, result.finishHours) : null
   const shownBatches = result ? (showAll ? result.batches : result.batches.slice(0, 25)) : []
+  const power = result?.electricity || null
+  const shownHours = power ? (showAllHours ? power.hourly : power.hourly.slice(0, 48)) : []
+  const headroom = power && Number.isFinite(power.cap) ? power.cap - power.peak : null
 
   return (
     <section className="detail planner">
@@ -102,7 +173,9 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
       <p className="sub">
         Schedules whole batches across the furnaces you make available, honouring every rule from the
         workbook's <code>Rules</code> sheet. Cycle lengths follow the cooling parameters set on the
-        Machines tab, so retuning a furnace there re-plans the line here.
+        Machines tab, so retuning a furnace there re-plans the line here. Give it a site current
+        limit and it will also push batches later rather than let the plan go over it, and show you
+        what the site draws hour by hour.
       </p>
 
       <div className="planner-controls">
@@ -187,6 +260,83 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
           </p>
         </div>
 
+        {powerData && (
+          <div className="control-block">
+            <span className="control-legend">Electricity</span>
+            <label htmlFor="plan-maxa">Maximum current for the site (A)</label>
+            <input
+              id="plan-maxa"
+              type="number"
+              min="0"
+              step="10"
+              value={maxAmps}
+              onChange={(e) => setMaxAmps(Number(e.target.value))}
+            />
+            <div className="amps-pair">
+              <span>
+                <label htmlFor="plan-rd">R&amp;D (A)</label>
+                <input
+                  id="plan-rd"
+                  type="number"
+                  min="0"
+                  step="5"
+                  value={rdAmps}
+                  onChange={(e) => setRdAmps(Number(e.target.value))}
+                />
+              </span>
+              <span>
+                <label htmlFor="plan-fac">Facility (A)</label>
+                <input
+                  id="plan-fac"
+                  type="number"
+                  min="0"
+                  step="5"
+                  value={facilityAmps}
+                  onChange={(e) => setFacilityAmps(Number(e.target.value))}
+                />
+              </span>
+            </div>
+            <p className="control-hint">
+              The sheet lists both as <em>Unknown</em>, so they have to come from you. They are drawn
+              for the whole horizon, under everything else.
+            </p>
+            <ul className="furnace-picker">
+              <li>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={coatingOn}
+                    onChange={() => setCoatingOn((v) => !v)}
+                  />
+                  <span>Coating line</span>
+                  <span className="pick-meta">
+                    {num(resolved?.coating.warmupAmps)} A / {num(resolved?.coating.warmupHours)} h then{' '}
+                    {num(resolved?.coating.runAmps)} A
+                  </span>
+                </label>
+              </li>
+              {extraEquipment.map((e) => (
+                <li key={e.id}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!!extras[e.id]}
+                      onChange={() => setExtras((cur) => ({ ...cur, [e.id]: !cur[e.id] }))}
+                    />
+                    <span>{e.name}</span>
+                    <span className="pick-meta">{num(e.maxAmps)} A</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+            <p className="control-hint">
+              No rule says when these run, so they are off unless you say otherwise. Cooling and vacuum
+              systems are not listed — the Rules sheet ties those to their furnaces, and the planner
+              switches them on and off with the batches.
+            </p>
+          </div>
+        )}
+
         <div className="control-block">
           <span className="control-legend">Furnaces available</span>
           <ul className="furnace-picker">
@@ -240,6 +390,20 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
               value={num(result.totals.batches)}
               sub={`${result.totals.carbBatches} carbonization · ${result.totals.graphBatches} graphitization`}
             />
+            {power && (
+              <Stat
+                label="Peak current"
+                value={`${num(power.peak)} A`}
+                sub={
+                  Number.isFinite(power.cap)
+                    ? headroom >= 0
+                      ? `${num(headroom)} A under the ${num(power.cap)} A limit`
+                      : `${num(-headroom)} A OVER the limit`
+                    : 'no limit set'
+                }
+                tone={power.overCap ? 'warn' : undefined}
+              />
+            )}
             <Stat
               label="Bottleneck"
               value={
@@ -276,9 +440,30 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
                       {p.label}
                     </li>
                   ))}
+                  {power?.coatingSegs.length > 0 && (
+                    <>
+                      <li>
+                        <span
+                          className="key"
+                          style={{ background: loadColor('coating', theme), opacity: 0.45 }}
+                        />
+                        Coating warm-up
+                      </li>
+                      <li>
+                        <span className="key" style={{ background: loadColor('coating', theme) }} />
+                        Coating running
+                      </li>
+                    </>
+                  )}
                 </ul>
               </div>
-              <GanttChart result={result} startDate={startDate} theme={theme} machines={machines} />
+              <GanttChart
+                result={result}
+                startDate={startDate}
+                theme={theme}
+                machines={machines}
+                coatingName={resolved?.coating.name}
+              />
 
               <div className="table-wrap">
                 <table>
@@ -353,8 +538,116 @@ export default function Planner({ machines, rules, paramsFor, theme }) {
                     {showAll ? 'Show first 25' : `Show all ${result.batches.length} batches`}
                   </button>
                 )}
-                <button className="btn" onClick={download}>
-                  Download CSV
+                <button
+                  className="btn"
+                  onClick={() => download(csv(result, startDate), `prodplan-schedule-${stampFile()}.csv`)}
+                >
+                  Download schedule CSV
+                </button>
+              </div>
+            </>
+          )}
+
+          {power && (
+            <>
+              <div className="chart-head">
+                <h3>Electricity</h3>
+                <ul className="legend">
+                  {LOAD_BANDS.map((b) => (
+                    <li key={b.key}>
+                      <span className="key" style={{ background: loadColor(b.key, theme) }} />
+                      {b.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="control-hint" style={{ marginTop: 0 }}>
+                Furnaces draw their rated current on the heating ramp only. Cooling and vacuum systems
+                follow the furnaces they serve, from element-on to cool enough to unload, and each one
+                is counted once however many of its furnaces are running.
+                {resolved?.coating.enabled &&
+                  ' The coating line is held up wherever there is headroom; where the line goes flat it has tripped and is paying its warm-up again.'}
+              </p>
+              <PowerChart
+                electricity={power}
+                startDate={startDate}
+                capAmps={power.cap}
+                theme={theme}
+              />
+
+              <div className="stats">
+                <Stat
+                  label="Energy over the plan"
+                  value={`${num(power.ampHours)} A·h`}
+                  sub={`${num(power.ampHours / Math.max(1, result.horizonHours))} A average`}
+                />
+                <Stat
+                  label="Coating line up"
+                  value={`${num(power.coatingUptime * 100)}%`}
+                  sub={
+                    power.coatingTrips.length
+                      ? `${power.coatingTrips.length} restart(s), ${num(resolved.coating.warmupHours)} h each`
+                      : 'never interrupted'
+                  }
+                  tone={power.coatingTrips.length ? 'warn' : undefined}
+                />
+                <Stat
+                  label="Headroom at the peak"
+                  value={headroom == null ? '—' : `${num(headroom)} A`}
+                  sub={
+                    Number.isFinite(power.cap)
+                      ? `peak ${num(power.peak)} A of ${num(power.cap)} A`
+                      : 'set a maximum to see this'
+                  }
+                  tone={headroom != null && headroom < 0 ? 'warn' : undefined}
+                />
+              </div>
+
+              <div className="table-wrap">
+                <table>
+                  <caption>Total current, hour by hour</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">In</th>
+                      <th scope="col">Clock</th>
+                      <th scope="col">R&amp;D + fac.</th>
+                      <th scope="col">Cool + vac.</th>
+                      <th scope="col">Coating</th>
+                      <th scope="col">Furnaces</th>
+                      <th scope="col">Total</th>
+                      <th scope="col">Heating</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shownHours.map((h) => (
+                      <tr key={h.hour} className={h.peak > power.cap + 1e-3 ? 'is-over' : undefined}>
+                        <td>+{h.hour} h</td>
+                        <th scope="row">{stamp(dateAt(startDate, h.from))}</th>
+                        <td>{num(h.baseline)}</td>
+                        <td>{num(h.support)}</td>
+                        <td>{num(h.coating)}</td>
+                        <td>{num(h.furnace)}</td>
+                        <td>
+                          <strong>{num(h.total)} A</strong>
+                        </td>
+                        <td>{h.furnacesOn.join(' + ') || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="table-actions">
+                {power.hourly.length > 48 && (
+                  <button className="btn" onClick={() => setShowAllHours((v) => !v)}>
+                    {showAllHours ? 'Show first 48 hours' : `Show all ${power.hourly.length} hours`}
+                  </button>
+                )}
+                <button
+                  className="btn"
+                  onClick={() => download(powerCsv(power, startDate), `prodplan-electricity-${stampFile()}.csv`)}
+                >
+                  Download electricity CSV
                 </button>
               </div>
             </>
