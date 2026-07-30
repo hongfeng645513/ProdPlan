@@ -87,7 +87,7 @@ async function listRuns(request, context) {
   try {
     const machineId = request.query.get('machineId')
     const { rows } = await query(
-      `SELECT r.id, r.machine_id AS "machineId", m.name AS "machineName",
+      `SELECT r.id::int AS id, r.machine_id AS "machineId", m.name AS "machineName",
               r.started_at AS "startedAt", r.ended_at AS "endedAt",
               r.sample_count AS "sampleCount",
               r.peak_temp_c::float8 AS "peakTempC",
@@ -146,7 +146,7 @@ async function importRun(request, context) {
          fit_rmse_c = excluded.fit_rmse_c,
          fit_points = excluded.fit_points,
          source_file = excluded.source_file
-       RETURNING id, (xmax = 0) AS created`,
+       RETURNING id::int AS id, (xmax = 0) AS created`,
       [machineId, run.startedAt, run.endedAt, run.sampleCount ?? 0, run.peakTempC,
        run.setPointC, run.heatOffAt || null, run.fit?.k ?? null, run.fit?.rmse ?? null,
        run.fit?.points ?? null, run.sourceFile || null, run.note || null],

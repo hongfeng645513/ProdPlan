@@ -90,6 +90,35 @@ export function parseCsv(text) {
   if (bad) warnings.push(`${bad} line(s) could not be read and were skipped.`)
   rows.sort((a, b) => a.at - b.at)
 
+  // Drop repeated timestamps.
+  //
+  // The logger occasionally writes the same sample twice within one second,
+  // distinguished only by the MCGS_TIMEMS column — the Furnace 3 export has two
+  // such pairs, with identical readings. A sample is keyed on (run, time), so
+  // the database collapses them anyway; deduplicating here means the count the
+  // importer reports matches the count that lands, instead of every affected
+  // run being reported as one sample short forever.
+  const deduped = []
+  let duplicates = 0
+  let lastMs = null
+  for (const r of rows) {
+    const ms = r.at.getTime()
+    if (ms === lastMs) {
+      duplicates++
+      continue
+    }
+    deduped.push(r)
+    lastMs = ms
+  }
+  if (duplicates) {
+    warnings.push(
+      `${duplicates} sample(s) repeated a timestamp already recorded and were dropped ` +
+        '— the logger wrote them twice within the same second.',
+    )
+  }
+  rows.length = 0
+  rows.push(...deduped)
+
   // An export that lands on a round number is usually a capped export, not a
   // complete history. Worth saying rather than silently importing a truncation.
   if (rows.length === 20000 || rows.length === 10000 || rows.length === 50000) {

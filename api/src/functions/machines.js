@@ -220,9 +220,26 @@ async function setCurve(request, context) {
     const exists = await client.query('SELECT 1 FROM machines WHERE id = $1', [id])
     if (!exists.rowCount) return json(404, { error: `no machine "${id}"` })
 
+    // The label is built HERE, from the run row, rather than trusted from the
+    // caller. A client that sends a blank produces provenance reading "Measured
+    // run of " — technically saved, useless to whoever reads it later. The
+    // server knows when the run started, so it is the server that says so.
+    let resolvedLabel = String(label || '').slice(0, 300) || null
     if (runId != null) {
-      const r = await client.query('SELECT 1 FROM runs WHERE id = $1 AND machine_id = $2', [runId, id])
+      const r = await client.query(
+        `SELECT to_char(started_at, 'YYYY-MM-DD HH24:MI') AS started,
+                peak_temp_c::float8 AS peak
+         FROM runs WHERE id = $1 AND machine_id = $2`,
+        [runId, id],
+      )
       if (!r.rowCount) return json(400, { error: `run ${runId} does not belong to ${id}` })
+
+      const started = r.rows[0].started
+      // Trust a caller's label only when it actually names the run.
+      if (!resolvedLabel || !resolvedLabel.includes(started)) {
+        const peak = r.rows[0].peak
+        resolvedLabel = `Measured run of ${started}${peak ? ` · ${Math.round(peak)} °C peak` : ''}`
+      }
     }
 
     await client.query('BEGIN')
@@ -243,7 +260,7 @@ async function setCurve(request, context) {
       `UPDATE machines SET curve_source_run_id = $2, curve_source_label = $3,
               curve_updated_at = now(), updated_at = now()
        WHERE id = $1`,
-      [id, runId ?? null, String(label || '').slice(0, 300) || null],
+      [id, runId ?? null, resolvedLabel],
     )
     await client.query('COMMIT')
 
@@ -251,6 +268,7 @@ async function setCurve(request, context) {
       id,
       points: sorted.length,
       runId: runId ?? null,
+      label: resolvedLabel,
       warnings: [
         'Phases, the cooling fit, cycle time and batch capacity are all derived from this curve, so every plan for this furnace changes.',
       ],

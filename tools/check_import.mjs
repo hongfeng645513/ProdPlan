@@ -142,6 +142,31 @@ check('element-off lands after the soak, not during the ramp',
     fit != null && fit.rmse < 15, fit ? `rmse ${fit.rmse}C` : '-')
 }
 
+// --- repeated timestamps --------------------------------------------------
+//
+// The logger sometimes writes a sample twice within one second, differing only
+// in MCGS_TIMEMS. Samples are keyed on (run, time), so the second write is
+// dropped on insert whatever happens here — but unless it is dropped at parse
+// time too, the importer reports a count that can never be reached and the run
+// looks permanently one sample short.
+{
+  const head = '"MCGS_TIME","MCGS_TIMEMS","低温测量值1","低温测量值2","低温测量值3","低温设定值1","真空检测数值","压力显示","水温测量值"'
+  const dup = [
+    head,
+    '2025/11/20 16:28:35,623,14.000000,15.000000,15.000000,0.000000,5000.000000,4.000000,21.600000',
+    '2025/11/20 16:29:05,623,14.000000,15.000000,15.000000,0.000000,5000.000000,4.000000,21.600000',
+    '2025/11/20 16:29:05,837,14.000000,15.000000,15.000000,0.000000,5000.000000,4.000000,21.600000',
+    '2025/11/20 16:29:35,623,14.000000,15.000000,15.000000,0.000000,5000.000000,4.000000,21.600000',
+  ].join('\n')
+  const r = parseCsv(dup)
+  check('a repeated timestamp is dropped', r.rows.length === 3, `${r.rows.length} rows from 4 lines`)
+  check('every timestamp is unique after parsing',
+    new Set(r.rows.map((x) => x.at.getTime())).size === r.rows.length)
+  check('the duplicate is reported rather than hidden',
+    r.warnings.some((w) => w.includes('repeated a timestamp')),
+    r.warnings.join(' | ') || 'no warning')
+}
+
 // --- malformed input ------------------------------------------------------
 const junk = parseCsv('"MCGS_TIME","MCGS_TIMEMS","a","b","c","d","e","f","g"\nnot,a,valid,row\n')
 check('a malformed row is skipped, not fatal', junk.rows.length === 0 && junk.warnings.length > 0)

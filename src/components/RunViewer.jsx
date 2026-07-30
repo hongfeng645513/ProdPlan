@@ -302,7 +302,11 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
   }, [runId])
 
   const timeline = useMemo(() => (samples?.length ? buildTimeline(samples) : null), [samples])
-  const run = runs?.find((r) => r.id === runId)
+  // Compared as strings: run ids arrive from a bigserial column, and
+  // node-postgres returns bigint as a string. A strict compare against the
+  // Number the <select> produces silently yields undefined, which blanks the
+  // provenance label and disables the phase presets.
+  const run = runs?.find((r) => String(r.id) === String(runId))
 
   const { indices, xFrom, xTo } = useMemo(() => {
     if (!timeline || !samples?.length) return { indices: [], xFrom: 0, xTo: 1 }

@@ -70,7 +70,7 @@ app.http('health', {
         // request never carried the whole run in the first place. Those are
         // different bugs and worth telling apart.
         const d = await query(
-          `SELECT r.id, r.machine_id AS machine, r.started_at AS started,
+          `SELECT r.id::int AS id, r.machine_id AS machine, r.started_at AS started,
                   r.sample_count AS declared,
                   (SELECT count(*)::int FROM run_samples s WHERE s.run_id = r.id) AS actual
            FROM runs r ORDER BY r.id`,
