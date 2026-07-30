@@ -151,7 +151,25 @@ export function buildMachine(source) {
   const points = [...source.measured].sort((a, b) => a.t - b.t)
   const phases = detectPhases(points)
   const ambient = ambientFor(points)
-  const cooling = fitNewton(points, phases, ambient)
+  let cooling = fitNewton(points, phases, ambient)
+
+  // An operator-applied constant, measured from real runs, replaces the one
+  // fitted from the reference curve. Kept as an override rather than silently
+  // substituted: `fittedK` preserves what the curve said, so the two can be
+  // compared and the choice reversed.
+  if (cooling && source.coolingKOverride != null) {
+    cooling = {
+      ...cooling,
+      fittedK: cooling.k,
+      k: source.coolingKOverride,
+      overridden: true,
+      overrideSource: source.coolingKSource || 'measured runs',
+      halfLifeHours:
+        source.coolingKOverride > 0
+          ? round(Math.log(2) / source.coolingKOverride, 2)
+          : null,
+    }
+  }
 
   const unloadT = points[points.length - 1].t
   const unloadTemp = points[points.length - 1].T
@@ -373,6 +391,8 @@ export function extractSource(payload) {
       yield: m.yield,
       hasOpenMarker: m.hasOpenMarker,
       measured: m.measured,
+      coolingKOverride: m.cooling?.overridden ? m.cooling.k : null,
+      coolingKSource: m.cooling?.overrideSource ?? null,
     })),
     ruleSentences: payload.rules.raw.map((r) => r.text),
     equipment: (payload.power?.equipment || []).map((e) => ({

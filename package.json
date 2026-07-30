@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "data": "python tools/convert_excel.py",
     "seed": "node db/make-seed.mjs",
-    "check": "node tools/check_derive.mjs && node tools/check_schedule.mjs"
+    "check": "node tools/check_derive.mjs && node tools/check_import.mjs && node tools/check_schedule.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

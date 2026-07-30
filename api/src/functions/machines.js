@@ -36,7 +36,9 @@ app.http('machines', {
                       gf_size            AS "gfSize",
                       gf_per_holder::float8 AS "gfPerHolder",
                       yield::float8      AS "yield",
-                      has_open_marker    AS "hasOpenMarker"
+                      has_open_marker    AS "hasOpenMarker",
+                      cooling_k_override::float8 AS "coolingKOverride",
+                      cooling_k_source   AS "coolingKSource"
                FROM machines ORDER BY name`),
         query(`SELECT machine_id AS "machineId", t_hours::float8 AS t, temp_c::float8 AS "T"
                FROM curve_points ORDER BY machine_id, t_hours`),

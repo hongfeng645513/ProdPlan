@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { parseRules } from '../lib/derive.js'
 import * as api from '../lib/api.js'
+import RunImport from './RunImport.jsx'
 import { num } from '../lib/format.js'
 
 /**
@@ -147,6 +148,7 @@ export default function Maintain({ data, canEdit, onChanged }) {
           ['machines', `Machines (${data.machines.length})`],
           ['equipment', `Equipment (${data.power.equipment.length})`],
           ['rules', `Rules (${data.rules.raw.length})`],
+          ['runs', 'Import runs'],
         ].map(([k, label]) => (
           <button key={k} className={section === k ? 'is-active' : ''} onClick={() => setSection(k)}>
             {label}
@@ -159,6 +161,7 @@ export default function Maintain({ data, canEdit, onChanged }) {
       {section === 'machines' && <Machines data={data} canEdit={canEdit} run={run} />}
       {section === 'equipment' && <Equipment data={data} canEdit={canEdit} run={run} />}
       {section === 'rules' && <Rules data={data} canEdit={canEdit} run={run} />}
+      {section === 'runs' && <RunImport data={data} canEdit={canEdit} onChanged={onChanged} />}
     </section>
   )
 }
