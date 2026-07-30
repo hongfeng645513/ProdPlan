@@ -1130,3 +1130,105 @@ button.link:hover {
   padding: 8px 12px;
   margin: 0 0 20px;
 }
+
+/* Maintain data ------------------------------------------------------------ */
+.maintain-tabs {
+  margin: 16px 0;
+}
+
+.edit-panel {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow);
+}
+
+.edit-panel h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.edit-grid label,
+.rule-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.edit-grid input,
+.edit-grid select,
+.rule-editor textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--plane);
+}
+
+.rule-editor textarea {
+  resize: vertical;
+  width: 100%;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn-sm {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.btn-danger {
+  color: #d1453b;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.rule-text {
+  font-weight: 400;
+  max-width: 34ch;
+}
+
+/* A blank current rating is counted as 0 A — flag it rather than let it read
+   as a legitimate zero. */
+.warn-cell {
+  color: #b07000;
+}
+
+.notice-error {
+  background: rgba(209, 69, 59, 0.08);
+  border-left-color: #d1453b;
+}
+
+.notice-ok {
+  background: var(--band-cool);
+  border-left-color: #2a78d6;
+}
+
+.notice-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.saved-text {
+  color: #2f8f4e;
+}

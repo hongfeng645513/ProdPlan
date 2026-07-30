@@ -13,11 +13,16 @@
     },
     {
       "route": "/api/*",
-      "allowedRoles": ["planner"]
+      "methods": ["POST", "PUT", "DELETE", "PATCH"],
+      "allowedRoles": ["editor"]
+    },
+    {
+      "route": "/api/*",
+      "allowedRoles": ["planner", "editor"]
     },
     {
       "route": "/*",
-      "allowedRoles": ["planner"]
+      "allowedRoles": ["planner", "editor"]
     }
   ],
   "responseOverrides": {

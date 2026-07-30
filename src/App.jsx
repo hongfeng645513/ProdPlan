@@ -5,8 +5,10 @@ import MachineDetail from './components/MachineDetail.jsx'
 import TemperatureChart from './components/TemperatureChart.jsx'
 import Planner from './components/Planner.jsx'
 import Forecast from './components/Forecast.jsx'
+import Maintain from './components/Maintain.jsx'
 import { buildCurve, cycleSummary, defaultParams } from './lib/cooling.js'
 import { loadMachineData } from './lib/dataSource.js'
+import { roles as fetchRoles } from './lib/api.js'
 import { clock, degrees, grams, num, seriesColor } from './lib/format.js'
 
 const STORE_KEY = 'prodplan.cooling.v1'
@@ -37,6 +39,7 @@ const writeStore = (v) => {
 export default function App() {
   const [theme, setTheme] = useState('light')
   const [state, setState] = useState(null) // {payload, origin, error}
+  const [userRoles, setUserRoles] = useState([])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -47,10 +50,19 @@ export default function App() {
     loadMachineData().then((r) => {
       if (live) setState(r)
     })
+    fetchRoles().then((r) => {
+      if (live) setUserRoles(r)
+    })
     return () => {
       live = false
     }
   }, [])
+
+  /** Re-read the source data after an edit; everything derived rebuilds with it. */
+  const reload = async () => {
+    const r = await loadMachineData()
+    setState(r)
+  }
 
   if (!state) {
     return (
@@ -79,10 +91,20 @@ export default function App() {
     )
   }
 
-  return <Dashboard data={state.payload} origin={state.origin} loadError={state.error} theme={theme} setTheme={setTheme} />
+  return (
+    <Dashboard
+      data={state.payload}
+      origin={state.origin}
+      loadError={state.error}
+      theme={theme}
+      setTheme={setTheme}
+      canEdit={userRoles.includes('editor')}
+      onChanged={reload}
+    />
+  )
 }
 
-function Dashboard({ data, origin, loadError, theme, setTheme }) {
+function Dashboard({ data, origin, loadError, theme, setTheme, canEdit, onChanged }) {
   const machines = data.machines
   const colorIndex = useMemo(() => Object.fromEntries(machines.map((m, i) => [m.id, i])), [machines])
 
@@ -205,8 +227,16 @@ function Dashboard({ data, origin, loadError, theme, setTheme }) {
           >
             Forecast
           </button>
+          <button
+            role="tab"
+            aria-selected={view === 'maintain'}
+            className={view === 'maintain' ? 'is-active' : ''}
+            onClick={() => setView('maintain')}
+          >
+            Maintain data
+          </button>
         </div>
-        <div className="filters" hidden={view === 'planner' || view === 'forecast'}>
+        <div className="filters" hidden={view !== 'machines' && view !== 'compare'}>
           {[
             ['all', 'All'],
             ['carb', 'Carbonization'],
@@ -229,6 +259,8 @@ function Dashboard({ data, origin, loadError, theme, setTheme }) {
         />
       ) : view === 'forecast' ? (
         <Forecast machines={machines} paramsFor={paramsFor} theme={theme} colorIndex={colorIndex} />
+      ) : view === 'maintain' ? (
+        <Maintain data={data} canEdit={canEdit} onChanged={onChanged} />
       ) : view === 'machines' ? (
         <>
           <div className="grid">
