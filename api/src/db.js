@@ -23,9 +23,19 @@ function getPool() {
       connectionString,
       // Azure Database for PostgreSQL refuses plaintext connections outright.
       ssl: { rejectUnauthorized: true },
-      max: 2,
+      // Six, not two. A B1ms server allows around 35 connections in total, and
+      // Static Web Apps runs a small number of function instances — so six per
+      // instance is comfortably within budget, while two turned out to be tight
+      // enough that a bulk import could sit waiting on the pool rather than on
+      // the database. If this ever needs to scale further, turn on the Flexible
+      // Server's built-in PgBouncer rather than raising this much higher.
+      max: 6,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 15_000,
+      // Do not let a single statement wedge a connection indefinitely: a hung
+      // insert is worse than a failed one, because the caller cannot retry it.
+      statement_timeout: 30_000,
+      query_timeout: 30_000,
     })
   }
   return pool

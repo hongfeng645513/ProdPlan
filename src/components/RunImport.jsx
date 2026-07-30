@@ -17,8 +17,20 @@ import { toSqlLocal, fmtLocal } from '../lib/runView.js'
 /** Furnaces whose export format is known. Others are added as formats arrive. */
 const SUPPORTED = ['furnace-3', 'furnace-4']
 
-/** Samples per request. Small enough to keep each request quick and retryable. */
-const CHUNK = 1000
+/**
+ * Samples per request.
+ *
+ * 500 is one INSERT statement server-side, so a chunk is a single database
+ * round trip rather than two. Smaller chunks mean more requests but each one is
+ * quick, which matters on a burstable server where sustained load throttles.
+ */
+const CHUNK = 500
+
+/** A chunk that has not answered in this long is treated as lost. */
+const REQUEST_TIMEOUT_MS = 45000
+
+/** Attempts per request, with a growing pause between them. */
+const RETRIES = 3
 
 const fmtDate = (d) => (d ? fmtLocal(d) : '—')
 
@@ -68,16 +80,56 @@ export default function RunImport({ data, canEdit, onChanged }) {
     setProgress(null)
     const lines = []
 
-    const post = async (url, payload) => {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const body = await res.json().catch(() => ({}))
-      if (res.status === 403) throw new Error('You do not have the editor role, so nothing was saved.')
-      if (!res.ok) throw new Error(body.error || body.reason || `Request failed (${res.status})`)
-      return body
+    /**
+     * POST with a timeout and retries.
+     *
+     * Without a timeout a stalled request simply never settles, and the import
+     * stops with the progress frozen and nothing said — which is exactly how
+     * this failed before. A burstable database server can also slow sharply
+     * under sustained inserts, so a chunk that fails once is usually worth
+     * trying again rather than abandoning the whole import.
+     */
+    const post = async (url, payload, attempt = 1) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        })
+        const body = await res.json().catch(() => ({}))
+
+        if (res.status === 403) {
+          throw new Error('You do not have the editor role, so nothing was saved.')
+        }
+        // 5xx and 429 are worth another go; a 400 will fail identically forever.
+        if (!res.ok) {
+          const retriable = res.status >= 500 || res.status === 429
+          const message = body.error || body.reason || `Request failed (${res.status})`
+          if (retriable && attempt < RETRIES) {
+            await new Promise((r) => setTimeout(r, attempt * 1500))
+            return post(url, payload, attempt + 1)
+          }
+          throw new Error(`${message}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`)
+        }
+        return body
+      } catch (err) {
+        const timedOut = err.name === 'AbortError'
+        if ((timedOut || err.message === 'Failed to fetch') && attempt < RETRIES) {
+          await new Promise((r) => setTimeout(r, attempt * 1500))
+          return post(url, payload, attempt + 1)
+        }
+        if (timedOut) {
+          throw new Error(
+            `The server did not respond within ${REQUEST_TIMEOUT_MS / 1000}s, after ${attempt} attempts.`,
+          )
+        }
+        throw err
+      } finally {
+        clearTimeout(timer)
+      }
     }
 
     try {
@@ -99,6 +151,25 @@ export default function RunImport({ data, canEdit, onChanged }) {
           },
         })
 
+        // Already complete? Skip it. Re-sending is harmless but pointless, and
+        // on a resume it is the difference between a few seconds and redoing
+        // every insert in the file.
+        if (meta.existingSamples >= run.samples.length) {
+          done += run.samples.length
+          lines.push(
+            `${fmtDate(run.startedAt)} — already complete, ${meta.existingSamples.toLocaleString()} samples`,
+          )
+          setLog([...lines])
+          setProgress({
+            run: n + 1,
+            of: parsed.runs.length,
+            percent: Math.round((done / totalSamples) * 100),
+            stored: meta.existingSamples,
+            runTotal: run.samples.length,
+          })
+          continue
+        }
+
         let stored = 0
         for (let i = 0; i < run.samples.length; i += CHUNK) {
           const chunk = run.samples.slice(i, i + CHUNK)
@@ -116,6 +187,8 @@ export default function RunImport({ data, canEdit, onChanged }) {
             run: n + 1,
             of: parsed.runs.length,
             percent: Math.round((done / totalSamples) * 100),
+            stored: body.total,
+            runTotal: run.samples.length,
           })
         }
 
@@ -250,7 +323,8 @@ export default function RunImport({ data, canEdit, onChanged }) {
               </button>
               {progress && (
                 <span className="sub import-progress">
-                  Run {progress.run} of {progress.of} · {progress.percent}% of samples stored
+                  Run {progress.run} of {progress.of} · {progress.stored?.toLocaleString()} of{' '}
+                  {progress.runTotal?.toLocaleString()} in this run · {progress.percent}% overall
                 </span>
               )}
             </div>
