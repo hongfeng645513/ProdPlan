@@ -6,6 +6,7 @@ import TemperatureChart from './components/TemperatureChart.jsx'
 import Planner from './components/Planner.jsx'
 import Forecast from './components/Forecast.jsx'
 import Maintain from './components/Maintain.jsx'
+import RunViewer from './components/RunViewer.jsx'
 import { buildCurve, cycleSummary, defaultParams } from './lib/cooling.js'
 import { loadMachineData } from './lib/dataSource.js'
 import { roles as fetchRoles } from './lib/api.js'
@@ -287,6 +288,9 @@ function Dashboard({ data, origin, loadError, theme, setTheme, canEdit, onChange
                 setOverrides(next)
               }}
             />
+          )}
+          {current && shown.some((m) => m.id === current.id) && origin === 'api' && (
+            <RunViewer key={current.id} machine={current} />
           )}
         </>
       ) : (

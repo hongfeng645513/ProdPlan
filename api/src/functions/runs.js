@@ -51,6 +51,38 @@ app.http('runsList', {
   },
 })
 
+app.http('runSamples', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'runs/{id}/samples',
+  handler: async (request, context) => {
+    try {
+      const id = Number(request.params.id)
+      if (!Number.isInteger(id)) return json(400, { error: 'run id must be an integer' })
+
+      // The whole run is returned in one go — a few thousand rows — so the
+      // viewer can re-scale and zoom without another round trip. Decimation for
+      // display happens in the browser, where it can follow the zoom level.
+      const { rows } = await query(
+        `SELECT at,
+                temp_a::float8     AS "tempA",
+                temp_b::float8     AS "tempB",
+                temp_c::float8     AS "tempC",
+                set_temp::float8   AS "setTemp",
+                vacuum::float8     AS "vacuum",
+                pressure::float8   AS "pressure",
+                water_temp::float8 AS "waterTemp"
+         FROM run_samples WHERE run_id = $1 ORDER BY at`,
+        [id],
+      )
+      return json(200, { runId: id, count: rows.length, samples: rows })
+    } catch (err) {
+      context.error('run samples failed', err)
+      return json(503, { error: 'could not read samples', reason: String(err.message || err).slice(0, 200) })
+    }
+  },
+})
+
 app.http('runImport', {
   methods: ['POST'],
   authLevel: 'anonymous',

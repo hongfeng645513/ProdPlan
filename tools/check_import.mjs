@@ -10,6 +10,7 @@
  *   node tools/check_import.mjs
  */
 import { parseCsv, segment, fitCooling, readRuns, probeMean } from '../src/lib/runImport.js'
+import { buildTimeline, decimate, GAP_DISPLAY } from '../src/lib/runView.js'
 
 let failures = 0
 const check = (name, ok, detail = '') => {
@@ -144,6 +145,37 @@ check('element-off lands after the soak, not during the ramp',
 const junk = parseCsv('"MCGS_TIME","MCGS_TIMEMS","a","b","c","d","e","f","g"\nnot,a,valid,row\n')
 check('a malformed row is skipped, not fatal', junk.rows.length === 0 && junk.warnings.length > 0)
 check('an empty file is handled', parseCsv('').warnings.length > 0)
+
+// --- the viewer's collapsed time axis -------------------------------------
+//
+// A chart with a quietly wrong axis still draws a convincing curve, so the
+// compression is asserted rather than eyeballed.
+{
+  const at = (min) => new Date(2025, 8, 23, 0, 0, 0, 0).getTime() + min * 60_000
+  const mk = (mins) => mins.map((m) => ({ at: new Date(at(m)) }))
+
+  // 0,1,2 then a three-hour hole, then 183,184
+  const tl = buildTimeline(mk([0, 1, 2, 183, 184]))
+  check('contiguous samples keep their real spacing', tl.xs[1] === 1 && tl.xs[2] === 2, tl.xs.join(','))
+  check('a long gap is compressed to a fixed width', tl.xs[3] === 2 + GAP_DISPLAY, String(tl.xs[3]))
+  check('spacing resumes after the gap', tl.xs[4] === 2 + GAP_DISPLAY + 1, String(tl.xs[4]))
+  check('the gap is reported so it can be marked', tl.gaps.length === 1 && Math.round(tl.gaps[0].minutes) === 181,
+    JSON.stringify(tl.gaps.map((g) => g.minutes)))
+  check('a 181-minute hole does not dominate a 4-minute run',
+    tl.span < 10, `span ${tl.span} display-minutes`)
+
+  const none = buildTimeline(mk([0, 1, 2, 3]))
+  check('no gaps means a plain linear axis', none.gaps.length === 0 && none.span === 3, String(none.span))
+  check('an empty sample list is safe', buildTimeline([]).xs.length === 0)
+
+  // decimation must not misreport the plotted range
+  const idx = Array.from({ length: 5000 }, (_, i) => i)
+  const thin = decimate(idx, 1000)
+  check('decimation respects the cap', thin.length <= 1001, `${thin.length} points`)
+  check('decimation keeps the first and last sample',
+    thin[0] === 0 && thin[thin.length - 1] === 4999, `${thin[0]}..${thin[thin.length - 1]}`)
+  check('a short series is left alone', decimate([1, 2, 3], 1000).length === 3)
+}
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')
 process.exit(failures ? 1 : 0)
