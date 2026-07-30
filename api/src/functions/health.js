@@ -56,12 +56,33 @@ app.http('health', {
       )
 
       let runCounts = null
+      let runDetail = null
       if (!missing.includes('runs')) {
         const r = await query(
           `SELECT (SELECT count(*)::int FROM runs) AS runs,
                   (SELECT count(*)::int FROM run_samples) AS samples`,
         )
         runCounts = r.rows[0]
+
+        // Declared vs actual sample count per run. `declared` is what the client
+        // said the run contained; `actual` is what reached the table. A gap
+        // between them says the insert died partway; a small `declared` says the
+        // request never carried the whole run in the first place. Those are
+        // different bugs and worth telling apart.
+        const d = await query(
+          `SELECT r.id, r.machine_id AS machine, r.started_at AS started,
+                  r.sample_count AS declared,
+                  (SELECT count(*)::int FROM run_samples s WHERE s.run_id = r.id) AS actual
+           FROM runs r ORDER BY r.id`,
+        )
+        runDetail = d.rows.map((x) => ({
+          id: x.id,
+          machine: x.machine,
+          started: x.started,
+          declared: x.declared,
+          actual: x.actual,
+          complete: x.declared === x.actual,
+        }))
       }
 
       return {
@@ -80,6 +101,7 @@ app.http('health', {
           missingTables: missing,
           schemaComplete: missing.length === 0,
           runs: runCounts,
+          runDetail,
           elapsedMs: Date.now() - started,
         },
       }

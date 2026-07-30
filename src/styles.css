@@ -1326,3 +1326,8 @@ input[type='file'] {
 .raw-table table {
   font-variant-numeric: tabular-nums;
 }
+
+.import-progress {
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+}

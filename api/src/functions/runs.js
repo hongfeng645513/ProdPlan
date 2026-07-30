@@ -49,10 +49,11 @@ app.http('runById', {
 })
 
 app.http('runSamples', {
-  methods: ['GET'],
+  methods: ['GET', 'POST'],
   authLevel: 'anonymous',
   route: 'runs/{id}/samples',
   handler: async (request, context) => {
+    if (request.method === 'POST') return appendSamples(request, context)
     try {
       const id = Number(request.params.id)
       if (!Number.isInteger(id)) return json(400, { error: 'run id must be an integer' })
@@ -108,50 +109,95 @@ async function listRuns(request, context) {
   }
 }
 
+/**
+ * Create (or find) a run, without its samples.
+ *
+ * Samples arrive separately, in chunks, via POST runs/{id}/samples. A run of
+ * seven thousand 30-second samples in one request is a body approaching a
+ * megabyte and a request lasting tens of seconds, with nothing to show the
+ * person waiting and nothing to resume from if it does not finish. Splitting it
+ * makes each request small, gives the UI real progress, and makes a partial
+ * import something to continue rather than something to undo.
+ *
+ * Idempotent: re-importing the same export returns the existing run and the
+ * number of samples it already has, so the client can carry on where it stopped.
+ */
 async function importRun(request, context) {
-  const client = await getPool().connect()
   try {
-    const body = await request.json()
-    const { machineId, run } = body
-    if (!machineId || !run?.samples?.length) {
-      return json(400, { error: 'machineId and a run with samples are required' })
+    const { machineId, run } = await request.json()
+    if (!machineId || !run?.startedAt) {
+      return json(400, { error: 'machineId and a run with startedAt are required' })
     }
 
-    const exists = await client.query('SELECT 1 FROM machines WHERE id = $1', [machineId])
+    const exists = await query('SELECT 1 FROM machines WHERE id = $1', [machineId])
     if (!exists.rowCount) return json(404, { error: `no machine "${machineId}"` })
 
-    await client.query('BEGIN')
-
-    // Re-importing the same export is normal — someone exports again to pick up
-    // newer runs. The unique constraint makes that idempotent instead of
-    // silently doubling a run's samples.
-    const ins = await client.query(
+    const ins = await query(
       `INSERT INTO runs (machine_id, started_at, ended_at, sample_count, peak_temp_c,
                          set_point_c, heat_off_at, fitted_k, fit_rmse_c, fit_points, source_file, note)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       ON CONFLICT (machine_id, started_at) DO NOTHING
-       RETURNING id`,
-      [machineId, run.startedAt, run.endedAt, run.samples.length, run.peakTempC,
+       ON CONFLICT (machine_id, started_at) DO UPDATE SET
+         ended_at = excluded.ended_at,
+         sample_count = excluded.sample_count,
+         peak_temp_c = excluded.peak_temp_c,
+         set_point_c = excluded.set_point_c,
+         heat_off_at = excluded.heat_off_at,
+         fitted_k = excluded.fitted_k,
+         fit_rmse_c = excluded.fit_rmse_c,
+         fit_points = excluded.fit_points,
+         source_file = excluded.source_file
+       RETURNING id, (xmax = 0) AS created`,
+      [machineId, run.startedAt, run.endedAt, run.sampleCount ?? 0, run.peakTempC,
        run.setPointC, run.heatOffAt || null, run.fit?.k ?? null, run.fit?.rmse ?? null,
        run.fit?.points ?? null, run.sourceFile || null, run.note || null],
     )
 
-    if (!ins.rowCount) {
-      await client.query('ROLLBACK')
-      return json(200, { skipped: true, reason: 'this run is already imported' })
-    }
     const runId = ins.rows[0].id
+    const have = await query('SELECT count(*)::int AS n FROM run_samples WHERE run_id = $1', [runId])
+
+    return json(ins.rows[0].created ? 201 : 200, {
+      runId,
+      created: ins.rows[0].created,
+      existingSamples: have.rows[0].n,
+    })
+  } catch (err) {
+    context.error('run create failed', err)
+    return json(500, { error: 'could not create the run', reason: String(err.message || err).slice(0, 300) })
+  }
+}
+
+/**
+ * Append a chunk of samples to a run.
+ *
+ * ON CONFLICT DO NOTHING on (run_id, at) makes a re-sent chunk a no-op, so a
+ * retry or a resume can send everything again without duplicating anything.
+ */
+async function appendSamples(request, context) {
+  try {
+    const runId = Number(request.params.id)
+    if (!Number.isInteger(runId)) return json(400, { error: 'run id must be an integer' })
+
+    const { samples } = await request.json()
+    if (!Array.isArray(samples) || !samples.length) {
+      return json(400, { error: 'samples are required' })
+    }
+    if (samples.length > 2000) {
+      return json(413, { error: 'send at most 2000 samples per request' })
+    }
+
+    const exists = await query('SELECT 1 FROM runs WHERE id = $1', [runId])
+    if (!exists.rowCount) return json(404, { error: `no run ${runId}` })
 
     let inserted = 0
-    for (let i = 0; i < run.samples.length; i += BATCH_ROWS) {
-      const chunk = run.samples.slice(i, i + BATCH_ROWS)
+    for (let i = 0; i < samples.length; i += BATCH_ROWS) {
+      const chunk = samples.slice(i, i + BATCH_ROWS)
       const values = []
       const placeholders = chunk.map((s, j) => {
         const b = j * 9
         values.push(runId, s.at, s.tempA, s.tempB, s.tempC, s.setTemp, s.vacuum, s.pressure, s.waterTemp)
         return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9})`
       })
-      const res = await client.query(
+      const res = await query(
         `INSERT INTO run_samples (run_id, at, temp_a, temp_b, temp_c, set_temp, vacuum, pressure, water_temp)
          VALUES ${placeholders.join(',')}
          ON CONFLICT DO NOTHING`,
@@ -160,17 +206,10 @@ async function importRun(request, context) {
       inserted += res.rowCount || 0
     }
 
-    await client.query('COMMIT')
-    return json(201, { runId, samples: inserted })
+    const total = await query('SELECT count(*)::int AS n FROM run_samples WHERE run_id = $1', [runId])
+    return json(200, { runId, inserted, total: total.rows[0].n })
   } catch (err) {
-    try {
-      await client.query('ROLLBACK')
-    } catch {
-      /* the connection may already be gone */
-    }
-    context.error('run import failed', err)
-    return json(500, { error: 'import failed', reason: String(err.message || err).slice(0, 300) })
-  } finally {
-    client.release()
+    context.error('sample append failed', err)
+    return json(500, { error: 'could not store samples', reason: String(err.message || err).slice(0, 300) })
   }
 }

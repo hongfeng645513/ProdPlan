@@ -17,6 +17,9 @@ import { toSqlLocal, fmtLocal } from '../lib/runView.js'
 /** Furnaces whose export format is known. Others are added as formats arrive. */
 const SUPPORTED = ['furnace-3', 'furnace-4']
 
+/** Samples per request. Small enough to keep each request quick and retryable. */
+const CHUNK = 1000
+
 const fmtDate = (d) => (d ? fmtLocal(d) : '—')
 
 export default function RunImport({ data, canEdit, onChanged }) {
@@ -27,6 +30,7 @@ export default function RunImport({ data, canEdit, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState([])
   const [error, setError] = useState(null)
+  const [progress, setProgress] = useState(null)
 
   const machines = data.machines.filter((m) => SUPPORTED.includes(m.id))
   const machine = data.machines.find((m) => m.id === machineId)
@@ -46,48 +50,85 @@ export default function RunImport({ data, canEdit, onChanged }) {
     }
   }
 
+  /**
+   * Import every run, one chunk of samples at a time.
+   *
+   * Chunked rather than one request per run: a run is up to seven thousand
+   * samples, which as a single body is close to a megabyte and a request lasting
+   * tens of seconds. The first attempt at this imported two runs of five and
+   * stopped, with nothing on screen to say how far it had got. Chunks make each
+   * request small, keep progress visible, and — because appending a sample is
+   * idempotent on (run, timestamp) — make a failed import something to run again
+   * rather than something to clean up.
+   */
   const doImport = async () => {
     if (!parsed?.runs.length) return
     setBusy(true)
     setError(null)
+    setProgress(null)
     const lines = []
+
+    const post = async (url, payload) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 403) throw new Error('You do not have the editor role, so nothing was saved.')
+      if (!res.ok) throw new Error(body.error || body.reason || `Request failed (${res.status})`)
+      return body
+    }
+
     try {
-      for (const run of parsed.runs) {
-        const res = await fetch('api/runs', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            machineId,
-            run: {
-              startedAt: toSqlLocal(run.startedAt),
-              endedAt: toSqlLocal(run.endedAt),
-              heatOffAt: run.heatOffAt ? toSqlLocal(run.heatOffAt) : null,
-              peakTempC: run.peakTempC,
-              setPointC: run.setPointC,
-              sourceFile: run.sourceFile,
-              fit: run.fit,
-              samples: run.samples.map((s) => ({
-                at: toSqlLocal(s.at),
-                tempA: s.tempA, tempB: s.tempB, tempC: s.tempC,
-                setTemp: s.setTemp, vacuum: s.vacuum,
-                pressure: s.pressure, waterTemp: s.waterTemp,
-              })),
-            },
-          }),
+      const totalSamples = parsed.runs.reduce((a, r) => a + r.samples.length, 0)
+      let done = 0
+
+      for (const [n, run] of parsed.runs.entries()) {
+        const meta = await post('api/runs', {
+          machineId,
+          run: {
+            startedAt: toSqlLocal(run.startedAt),
+            endedAt: toSqlLocal(run.endedAt),
+            heatOffAt: run.heatOffAt ? toSqlLocal(run.heatOffAt) : null,
+            sampleCount: run.samples.length,
+            peakTempC: run.peakTempC,
+            setPointC: run.setPointC,
+            sourceFile: run.sourceFile,
+            fit: run.fit,
+          },
         })
-        const body = await res.json().catch(() => ({}))
-        if (res.status === 403) throw new Error('You do not have the editor role.')
-        if (!res.ok) throw new Error(body.error || `Import failed (${res.status})`)
+
+        let stored = 0
+        for (let i = 0; i < run.samples.length; i += CHUNK) {
+          const chunk = run.samples.slice(i, i + CHUNK)
+          const body = await post(`api/runs/${meta.runId}/samples`, {
+            samples: chunk.map((s) => ({
+              at: toSqlLocal(s.at),
+              tempA: s.tempA, tempB: s.tempB, tempC: s.tempC,
+              setTemp: s.setTemp, vacuum: s.vacuum,
+              pressure: s.pressure, waterTemp: s.waterTemp,
+            })),
+          })
+          stored = body.total
+          done += chunk.length
+          setProgress({
+            run: n + 1,
+            of: parsed.runs.length,
+            percent: Math.round((done / totalSamples) * 100),
+          })
+        }
+
         lines.push(
-          body.skipped
-            ? `${fmtDate(run.startedAt)} — already imported, skipped`
-            : `${fmtDate(run.startedAt)} — ${body.samples} samples stored`,
+          `${fmtDate(run.startedAt)} — ${stored.toLocaleString()} of ${run.samples.length.toLocaleString()} samples stored` +
+            (meta.created ? '' : ' (run already existed; filled in what was missing)'),
         )
         setLog([...lines])
       }
+      setProgress(null)
       await onChanged()
     } catch (err) {
-      setError(err.message)
+      setError(`${err.message} Anything already stored is kept — run the import again to continue from where it stopped.`)
     } finally {
       setBusy(false)
     }
@@ -207,6 +248,11 @@ export default function RunImport({ data, canEdit, onChanged }) {
               <button className="btn" onClick={doImport} disabled={busy || !parsed.runs.length}>
                 {busy ? 'Importing…' : `Import ${parsed.runs.length} run(s)`}
               </button>
+              {progress && (
+                <span className="sub import-progress">
+                  Run {progress.run} of {progress.of} · {progress.percent}% of samples stored
+                </span>
+              )}
             </div>
           )}
 
