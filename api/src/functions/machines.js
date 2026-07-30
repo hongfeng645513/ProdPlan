@@ -14,7 +14,7 @@
  * modelling, in one language, reachable by `npm run check` under bare Node.
  */
 const { app } = require('@azure/functions')
-const { query } = require('../db')
+const { getPool, query } = require('../db')
 const { validateMachine } = require('../validate')
 
 const json = (status, body) => ({ status, jsonBody: body })
@@ -59,6 +59,13 @@ app.http('machineCooling', {
   handler: async (request, context) => setCooling(request, context),
 })
 
+app.http('machineCurve', {
+  methods: ['PUT'],
+  authLevel: 'anonymous',
+  route: 'machines/{id}/curve',
+  handler: async (request, context) => setCurve(request, context),
+})
+
 // --------------------------------------------------------------------------
 
 async function listSource(context) {
@@ -74,7 +81,10 @@ async function listSource(context) {
                     yield::float8      AS "yield",
                     has_open_marker    AS "hasOpenMarker",
                     cooling_k_override::float8 AS "coolingKOverride",
-                    cooling_k_source   AS "coolingKSource"
+                    cooling_k_source   AS "coolingKSource",
+                    curve_source_run_id AS "curveSourceRunId",
+                    curve_source_label AS "curveSourceLabel",
+                    curve_updated_at   AS "curveUpdatedAt"
              FROM machines ORDER BY name`),
       query(`SELECT machine_id AS "machineId", t_hours::float8 AS t, temp_c::float8 AS "T"
              FROM curve_points ORDER BY machine_id, t_hours`),
@@ -171,6 +181,90 @@ async function deleteMachine(request, context) {
     return json(200, { id, deleted: true, warnings })
   } catch (err) {
     return fail(context, 'machine delete', err)
+  }
+}
+
+/**
+ * Replace a furnace's reference curve with points resampled from a measured run.
+ *
+ * The resampling happens in the browser (src/lib/curveFromRun.js) so the shaping
+ * logic stays beside the model it feeds and remains testable under Node; this
+ * endpoint receives the finished points. It is the whole curve or nothing —
+ * inside one transaction — because a half-replaced curve would derive phases and
+ * a cooling fit from two different cycles spliced together, and would look
+ * perfectly ordinary while doing it.
+ *
+ * The run it came from is recorded. Replacing a curve changes the furnace's
+ * phases, its cooling constant, its cycle length and therefore every plan it
+ * appears in, so where those numbers came from should not be a mystery later.
+ */
+async function setCurve(request, context) {
+  const client = await getPool().connect()
+  try {
+    const id = request.params.id
+    const { points, runId, label } = await request.json()
+
+    if (!Array.isArray(points) || points.length < 3) {
+      return json(400, { error: 'at least three curve points are required' })
+    }
+    const bad = points.find(
+      (p) => !Number.isFinite(p?.t) || !Number.isFinite(p?.T) || p.t < 0,
+    )
+    if (bad) return json(400, { error: 'every point needs a numeric t (hours, >= 0) and T (degrees C)' })
+
+    const sorted = [...points].sort((a, b) => a.t - b.t)
+    if (new Set(sorted.map((p) => p.t)).size !== sorted.length) {
+      return json(400, { error: 'curve points must have distinct times' })
+    }
+
+    const exists = await client.query('SELECT 1 FROM machines WHERE id = $1', [id])
+    if (!exists.rowCount) return json(404, { error: `no machine "${id}"` })
+
+    if (runId != null) {
+      const r = await client.query('SELECT 1 FROM runs WHERE id = $1 AND machine_id = $2', [runId, id])
+      if (!r.rowCount) return json(400, { error: `run ${runId} does not belong to ${id}` })
+    }
+
+    await client.query('BEGIN')
+    await client.query('DELETE FROM curve_points WHERE machine_id = $1', [id])
+
+    const values = []
+    const placeholders = sorted.map((p, j) => {
+      const b = j * 3
+      values.push(id, p.t, p.T)
+      return `($${b + 1},$${b + 2},$${b + 3})`
+    })
+    await client.query(
+      `INSERT INTO curve_points (machine_id, t_hours, temp_c) VALUES ${placeholders.join(',')}`,
+      values,
+    )
+
+    await client.query(
+      `UPDATE machines SET curve_source_run_id = $2, curve_source_label = $3,
+              curve_updated_at = now(), updated_at = now()
+       WHERE id = $1`,
+      [id, runId ?? null, String(label || '').slice(0, 300) || null],
+    )
+    await client.query('COMMIT')
+
+    return json(200, {
+      id,
+      points: sorted.length,
+      runId: runId ?? null,
+      warnings: [
+        'Phases, the cooling fit, cycle time and batch capacity are all derived from this curve, so every plan for this furnace changes.',
+      ],
+    })
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {
+      /* the connection may already be gone */
+    }
+    context.error('curve replace failed', err)
+    return json(500, { error: 'could not replace the curve', reason: String(err.message || err).slice(0, 300) })
+  } finally {
+    client.release()
   }
 }
 

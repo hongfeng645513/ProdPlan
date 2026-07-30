@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { num } from '../lib/format.js'
 import { buildTimeline, decimate, asDate, fmtLocal, GAP_DISPLAY } from '../lib/runView.js'
+import { curveFromRun, summary } from '../lib/curveFromRun.js'
 
 /**
  * View the imported runs for one furnace: temperatures, vacuum, pressure and
@@ -134,7 +135,122 @@ function Chart({ samples, indices, xs, gaps, xFrom, xTo, series, height, log, un
   )
 }
 
-export default function RunViewer({ machine }) {
+/**
+ * Adopt a run as the furnace's reference curve.
+ *
+ * Kept behind a confirmation and shown next to what it would change, because the
+ * reference curve is what the planner derives phases, the cooling fit, cycle
+ * length and batch capacity from — so this alters every plan the furnace appears
+ * in, and does so without anything looking obviously different afterwards.
+ */
+function AdoptCurve({ machine, samples, runId, runLabel, canEdit, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [done, setDone] = useState(null)
+
+  const built = useMemo(() => (samples?.length ? curveFromRun(samples) : null), [samples])
+  const next = useMemo(() => (built?.points?.length ? summary(built.points) : null), [built])
+  const now = useMemo(() => summary(machine.measured), [machine.measured])
+
+  if (!built || !next) return null
+
+  const apply = async () => {
+    if (!confirm(
+      `Replace ${machine.name}'s reference curve with the run of ${runLabel}?\n\n` +
+        'Phases, the cooling fit, cycle time and batch capacity all derive from this curve, ' +
+        'so every plan for this furnace will change. The previous curve is not kept.',
+    )) return
+
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`api/machines/${encodeURIComponent(machine.id)}/curve`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          points: built.points,
+          runId,
+          label: `Measured run of ${runLabel}`,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 403) throw new Error('You do not have the editor role.')
+      if (!res.ok) throw new Error(body.error || body.reason || `Failed (${res.status})`)
+      setDone(`Reference curve replaced with ${body.points} points from this run.`)
+      if (onChanged) await onChanged()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const row = (label, a, b, unit = '') => (
+    <tr>
+      <th scope="row">{label}</th>
+      <td>{a == null ? '—' : `${num(a, 2)}${unit}`}</td>
+      <td className={a != null && b != null && Math.abs(a - b) > 1e-6 ? 'changed-cell' : ''}>
+        {b == null ? '—' : `${num(b, 2)}${unit}`}
+      </td>
+    </tr>
+  )
+
+  return (
+    <div className="edit-panel">
+      <h3>Use this run as the reference curve</h3>
+      <p className="sub">
+        The run is resampled hourly from the mean of the three probes.
+        {built.truncatedAtHours != null &&
+          ` It stops at ${num(built.truncatedAtHours, 1)} h, where the chamber was back-filled — so the unload temperature becomes the temperature at which the furnace is actually opened.`}
+      </p>
+
+      <div className="table-wrap">
+        <table className="compare-curve">
+          <thead>
+            <tr>
+              <th scope="col">Derived from the curve</th>
+              <th scope="col">In use now</th>
+              <th scope="col">From this run</th>
+            </tr>
+          </thead>
+          <tbody>
+            {row('Peak temperature', now?.peakTemp, next.peakTemp, ' °C')}
+            {row('Heating', now?.heatDuration, next.heatDuration, ' h')}
+            {row('Hold', now?.holdDuration, next.holdDuration, ' h')}
+            {row('Cooling', now?.coolDuration, next.coolDuration, ' h')}
+            {row('Full cycle', now?.cycleDuration, next.cycleDuration, ' h')}
+            {row('Unload temperature', now?.unloadTemp, next.unloadTemp, ' °C')}
+            {row('Fitted k', now?.k, next.k, ' /h')}
+            {row('Fit error', now?.rmse, next.rmse, ' °C')}
+            {row('Points', now?.points, next.points)}
+          </tbody>
+        </table>
+      </div>
+
+      {built.warnings.length > 0 && (
+        <div className="notice">
+          <ul className="notice-list">
+            {built.warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+      {error && <div className="notice notice-error"><strong>{error}</strong></div>}
+      {done && <div className="notice notice-ok"><strong>{done}</strong></div>}
+
+      {canEdit ? (
+        <div className="edit-actions">
+          <button className="btn" onClick={apply} disabled={busy}>
+            {busy ? 'Replacing…' : 'Replace the reference curve'}
+          </button>
+        </div>
+      ) : (
+        <p className="sub">Replacing the curve requires the <code>editor</code> role.</p>
+      )}
+    </div>
+  )
+}
+
+export default function RunViewer({ machine, canEdit, onChanged }) {
   const [runs, setRuns] = useState(null)
   const [runId, setRunId] = useState(null)
   const [samples, setSamples] = useState(null)
@@ -246,6 +362,15 @@ export default function RunViewer({ machine }) {
   return (
     <section className="detail">
       <h2>Measured runs — {machine.name}</h2>
+      {machine.curveSource && (
+        <p className="notice notice-ok">
+          The reference curve for {machine.name} comes from{' '}
+          <strong>{machine.curveSource.label || `run ${machine.curveSource.runId}`}</strong>
+          {machine.curveSource.updatedAt && ` — applied ${fmtLocal(machine.curveSource.updatedAt)}`}.
+          Phases, cooling and cycle time all derive from it.
+        </p>
+      )}
+
       <p className="sub">
         Imported from the instrument log. Time without logging is collapsed on the axis and marked
         with a vertical line, so contiguous stretches keep their real proportions and no line is
@@ -329,6 +454,15 @@ export default function RunViewer({ machine }) {
             </button>
             <button className="btn" onClick={downloadCsv}>Download interval as CSV</button>
           </div>
+
+          <AdoptCurve
+            machine={machine}
+            samples={samples}
+            runId={runId}
+            runLabel={run ? fmtLocal(run.startedAt) : ''}
+            canEdit={canEdit}
+            onChanged={onChanged}
+          />
 
           {showRows && (
             <div className="table-wrap raw-table">

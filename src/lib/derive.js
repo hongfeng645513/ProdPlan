@@ -190,6 +190,19 @@ export function buildMachine(source) {
     gfPerHolder: source.gfPerHolder,
     yield: source.yield,
     hasOpenMarker: !!source.hasOpenMarker,
+    // Where the reference curve came from, present only once a curve has been
+    // replaced from a measured run. Added conditionally so a workbook-derived
+    // payload stays byte-identical to what convert_excel.py produces, which is
+    // what check_derive.mjs asserts.
+    ...(source.curveSourceRunId
+      ? {
+          curveSource: {
+            runId: source.curveSourceRunId,
+            label: source.curveSourceLabel || null,
+            updatedAt: source.curveUpdatedAt || null,
+          },
+        }
+      : {}),
     measured: points,
     phases: {
       heatStart: phases.heatStart,
@@ -393,6 +406,9 @@ export function extractSource(payload) {
       measured: m.measured,
       coolingKOverride: m.cooling?.overridden ? m.cooling.k : null,
       coolingKSource: m.cooling?.overrideSource ?? null,
+      curveSourceRunId: m.curveSource?.runId ?? null,
+      curveSourceLabel: m.curveSource?.label ?? null,
+      curveUpdatedAt: m.curveSource?.updatedAt ?? null,
     })),
     ruleSentences: payload.rules.raw.map((r) => r.text),
     equipment: (payload.power?.equipment || []).map((e) => ({

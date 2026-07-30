@@ -290,7 +290,7 @@ function Dashboard({ data, origin, loadError, theme, setTheme, canEdit, onChange
             />
           )}
           {current && shown.some((m) => m.id === current.id) && origin === 'api' && (
-            <RunViewer key={current.id} machine={current} />
+            <RunViewer key={current.id} machine={current} canEdit={canEdit} onChanged={onChanged} />
           )}
         </>
       ) : (

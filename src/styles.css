@@ -1331,3 +1331,16 @@ input[type='file'] {
   align-self: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* Reference-curve replacement ---------------------------------------------- */
+.compare-curve th[scope='row'] {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* A value the replacement would change. Highlighted because replacing a curve
+   alters every plan for the furnace without anything looking different. */
+.changed-cell {
+  font-weight: 600;
+  color: #b07000;
+}

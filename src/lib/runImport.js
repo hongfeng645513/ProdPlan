@@ -174,6 +174,24 @@ export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
  * usable cooling branch — a run that was stopped early, or never fired, has
  * nothing to say about how the furnace cools.
  */
+/**
+ * Index at which the chamber was back-filled, or -1.
+ *
+ * The threshold comes from the run's own vacuum range rather than a fixed
+ * number, because the instrument's units are not guaranteed to be the same on
+ * every furnace. Shared by the cooling fit and the reference-curve builder so
+ * both cut at the same place.
+ */
+export function ventIndex(rows, fromIndex = 0) {
+  const maxVacuum = Math.max(...rows.map((r) => r.vacuum ?? 0))
+  if (!(maxVacuum > 1000)) return -1
+  const ventAbove = maxVacuum * 0.1
+  for (let i = Math.max(0, fromIndex); i < rows.length; i++) {
+    if ((rows[i].vacuum ?? 0) > ventAbove) return i
+  }
+  return -1
+}
+
 export function fitCooling(seg, { ambient = null } = {}) {
   if (!seg.fired || seg.heatOffIndex < 0) return null
 

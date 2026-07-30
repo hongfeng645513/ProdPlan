@@ -11,6 +11,7 @@
  */
 import { parseCsv, segment, fitCooling, readRuns, probeMean } from '../src/lib/runImport.js'
 import { buildTimeline, decimate, toSqlLocal, asDate, GAP_DISPLAY } from '../src/lib/runView.js'
+import { curveFromRun, summary } from '../src/lib/curveFromRun.js'
 
 let failures = 0
 const check = (name, ok, detail = '') => {
@@ -200,6 +201,63 @@ check('an empty file is handled', parseCsv('').warnings.length > 0)
   check('midnight does not roll to the previous day',
     toSqlLocal(asDate('2025-09-23 00:30:00')) === '2025-09-23 00:30:00',
     toSqlLocal(asDate('2025-09-23 00:30:00')))
+}
+
+// --- a run resampled into a reference curve -------------------------------
+//
+// The reference curve is what the planner derives phases, the cooling fit, cycle
+// length and capacity from, so a resampling error propagates into every plan
+// while still looking like a perfectly reasonable curve.
+{
+  const trueK = 0.07
+  const amb = 20
+  const peak = 1000
+  const RAMP = 7
+  const SOAK = 1
+  const lines = ['"MCGS_TIME","MCGS_TIMEMS","低温测量值1","低温测量值2","低温测量值3","低温设定值1","真空检测数值","压力显示","水温测量值"']
+  const t0 = new Date(2025, 10, 18, 12, 48, 0).getTime()
+  const row = (h, T, set, vac) => {
+    const at = new Date(t0 + h * 3600_000)
+    lines.push(`${stamp(at)},600,${T.toFixed(6)},${T.toFixed(6)},${T.toFixed(6)},${set.toFixed(6)},${vac.toFixed(6)},0.000000,25.000000`)
+  }
+  for (let h = 0; h < RAMP; h += 30 / 3600) row(h, amb + (peak - amb) * (h / RAMP), peak, 1)
+  for (let h = RAMP; h < RAMP + SOAK; h += 30 / 3600) row(h, peak, peak, 1)
+  let last = peak
+  for (let h = 0; h <= 12; h += 30 / 3600) {
+    last = amb + (peak - amb) * Math.exp(-trueK * h)
+    row(RAMP + SOAK + h, last, 0, 1)
+  }
+  // chamber opened: convective collapse, which must not reach the curve
+  for (let h = 0; h <= 3; h += 30 / 3600) row(RAMP + SOAK + 12 + h, Math.max(amb, last * Math.exp(-2 * h)), 0, 100000)
+
+  const { rows: sampleRows } = parseCsv(lines.join('\n'))
+  const built = curveFromRun(sampleRows.map((r) => ({ ...r, at: r.at })))
+
+  check('curve starts at hour zero', built.points[0]?.t === 0, String(built.points[0]?.t))
+  check('curve is sampled hourly',
+    built.points.slice(0, 8).every((p, i) => Math.abs(p.t - i) < 1e-9),
+    built.points.slice(0, 4).map((p) => p.t).join(','))
+  check('curve stops at the vacuum break',
+    built.truncatedAtHours != null && Math.abs(built.truncatedAtHours - 20) < 0.1,
+    String(built.truncatedAtHours))
+  check('the convective collapse is excluded',
+    built.points[built.points.length - 1].T > 300,
+    `ends at ${built.points[built.points.length - 1].T} C`)
+
+  const s = summary(built.points)
+  check('recovers the heating duration', s && Math.abs(s.heatDuration - RAMP) <= 1, `${s?.heatDuration} h vs ${RAMP}`)
+  check('recovers the hold duration', s && Math.abs(s.holdDuration - SOAK) <= 1, `${s?.holdDuration} h vs ${SOAK}`)
+  check('recovers the peak', s && Math.abs(s.peakTemp - peak) < 5, `${s?.peakTemp} C`)
+  check('the curve refits k close to the true value',
+    s?.k != null && Math.abs(s.k - trueK) / trueK < 0.1, `${s?.k} vs ${trueK}`)
+  check('unload temperature is the temperature at the vent',
+    s && s.unloadTemp === built.points[built.points.length - 1].T, String(s?.unloadTemp))
+
+  // Points must be strictly increasing in t, or the API rejects them and
+  // detectPhases would index the wrong sample.
+  check('times are strictly increasing',
+    built.points.every((p, i) => i === 0 || p.t > built.points[i - 1].t))
+  check('no duplicate times', new Set(built.points.map((p) => p.t)).size === built.points.length)
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')

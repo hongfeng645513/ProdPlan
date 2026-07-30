@@ -72,3 +72,15 @@ ALTER TABLE machines ADD COLUMN IF NOT EXISTS cooling_k_override numeric;
 ALTER TABLE machines ADD COLUMN IF NOT EXISTS cooling_k_source text;
 
 COMMIT;
+
+-- Provenance for the reference curve.
+--
+-- Replacing a furnace's reference curve changes its phases, its cooling fit, its
+-- cycle length and therefore every plan it appears in. Recording which run the
+-- curve came from makes that traceable rather than a silent change in the
+-- numbers — and lets the app say "measured, 18 Nov" instead of leaving an
+-- operator to wonder why the cycle time moved.
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS curve_source_run_id bigint
+  REFERENCES runs(id) ON DELETE SET NULL;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS curve_source_label text;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS curve_updated_at timestamptz;
