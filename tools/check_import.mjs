@@ -10,7 +10,7 @@
  *   node tools/check_import.mjs
  */
 import { parseCsv, segment, fitCooling, readRuns, probeMean } from '../src/lib/runImport.js'
-import { buildTimeline, decimate, GAP_DISPLAY } from '../src/lib/runView.js'
+import { buildTimeline, decimate, toSqlLocal, asDate, GAP_DISPLAY } from '../src/lib/runView.js'
 
 let failures = 0
 const check = (name, ok, detail = '') => {
@@ -175,6 +175,31 @@ check('an empty file is handled', parseCsv('').warnings.length > 0)
   check('decimation keeps the first and last sample',
     thin[0] === 0 && thin[thin.length - 1] === 4999, `${thin[0]}..${thin[thin.length - 1]}`)
   check('a short series is left alone', decimate([1, 2, 3], 1000).length === 3)
+}
+
+// --- timestamps survive the round trip as wall clock ----------------------
+//
+// The export has no time zone, so its times are wall clock and stored in a
+// `timestamp` column as-is. Using toISOString() anywhere in that path shifts
+// every reading by the machine's UTC offset — on import and again on display,
+// consistently enough to look right while being hours wrong.
+{
+  const wall = '2025/09/23 13:44:17'
+  const [d] = parseCsv(
+    '"MCGS_TIME","MCGS_TIMEMS","a","b","c","d","e","f","g"\n' +
+      `${wall},600,500.0,500.0,500.0,1000.0,1.0,0.0,25.0\n`,
+  ).rows
+  check('parsed as the wall clock printed in the file',
+    d.at.getHours() === 13 && d.at.getMinutes() === 44 && d.at.getSeconds() === 17,
+    d.at.toString().slice(0, 24))
+  check('serialised back to the same wall clock',
+    toSqlLocal(d.at) === '2025-09-23 13:44:17', toSqlLocal(d.at))
+  check('a database string round trips unchanged',
+    toSqlLocal(asDate('2025-09-23 13:44:17')) === '2025-09-23 13:44:17',
+    toSqlLocal(asDate('2025-09-23 13:44:17')))
+  check('midnight does not roll to the previous day',
+    toSqlLocal(asDate('2025-09-23 00:30:00')) === '2025-09-23 00:30:00',
+    toSqlLocal(asDate('2025-09-23 00:30:00')))
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')

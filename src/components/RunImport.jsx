@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { readRuns, DEFAULT_GAP_HOURS } from '../lib/runImport.js'
 import { num } from '../lib/format.js'
+import { toSqlLocal, fmtLocal } from '../lib/runView.js'
 
 /**
  * Import an MCGS instrument export and, optionally, adopt the cooling constant
@@ -16,8 +17,7 @@ import { num } from '../lib/format.js'
 /** Furnaces whose export format is known. Others are added as formats arrive. */
 const SUPPORTED = ['furnace-3', 'furnace-4']
 
-const fmtDate = (d) =>
-  d instanceof Date ? d.toISOString().slice(0, 16).replace('T', ' ') : String(d ?? '—')
+const fmtDate = (d) => (d ? fmtLocal(d) : '—')
 
 export default function RunImport({ data, canEdit, onChanged }) {
   const [machineId, setMachineId] = useState(SUPPORTED[0])
@@ -59,17 +59,15 @@ export default function RunImport({ data, canEdit, onChanged }) {
           body: JSON.stringify({
             machineId,
             run: {
-              startedAt: run.startedAt.toISOString().slice(0, 19).replace('T', ' '),
-              endedAt: run.endedAt.toISOString().slice(0, 19).replace('T', ' '),
-              heatOffAt: run.heatOffAt
-                ? run.heatOffAt.toISOString().slice(0, 19).replace('T', ' ')
-                : null,
+              startedAt: toSqlLocal(run.startedAt),
+              endedAt: toSqlLocal(run.endedAt),
+              heatOffAt: run.heatOffAt ? toSqlLocal(run.heatOffAt) : null,
               peakTempC: run.peakTempC,
               setPointC: run.setPointC,
               sourceFile: run.sourceFile,
               fit: run.fit,
               samples: run.samples.map((s) => ({
-                at: s.at.toISOString().slice(0, 19).replace('T', ' '),
+                at: toSqlLocal(s.at),
                 tempA: s.tempA, tempB: s.tempB, tempC: s.tempC,
                 setTemp: s.setTemp, vacuum: s.vacuum,
                 pressure: s.pressure, waterTemp: s.waterTemp,

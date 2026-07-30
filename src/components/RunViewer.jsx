@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { num } from '../lib/format.js'
-import { buildTimeline, decimate, asDate, GAP_DISPLAY } from '../lib/runView.js'
+import { buildTimeline, decimate, asDate, fmtLocal, GAP_DISPLAY } from '../lib/runView.js'
 
 /**
  * View the imported runs for one furnace: temperatures, vacuum, pressure and
@@ -29,7 +29,6 @@ const CHART_W = 900
 const PAD = { l: 62, r: 16, t: 12, b: 26 }
 const MAX_PLOT_POINTS = 1400
 
-const fmtStamp = (d) => asDate(d).toISOString().slice(0, 16).replace('T', ' ')
 
 /**
  * One chart. `series` are {key, label, color}; values are read off the samples.
@@ -203,7 +202,7 @@ export default function RunViewer({ machine }) {
     const body = indices
       .map((i) => {
         const s = samples[i]
-        return [fmtStamp(s.at), s.tempA, s.tempB, s.tempC, s.setTemp, s.vacuum, s.pressure, s.waterTemp].join(',')
+        return [fmtLocal(s.at), s.tempA, s.tempB, s.tempC, s.setTemp, s.vacuum, s.pressure, s.waterTemp].join(',')
       })
       .join('\n')
     const url = URL.createObjectURL(new Blob([head + '\n' + body], { type: 'text/csv' }))
@@ -259,7 +258,7 @@ export default function RunViewer({ machine }) {
           <select value={runId ?? ''} onChange={(e) => setRunId(Number(e.target.value))}>
             {runs.map((r) => (
               <option key={r.id} value={r.id}>
-                {fmtStamp(r.startedAt)} · {num(r.peakTempC)} °C peak · {r.sampleCount.toLocaleString()} samples
+                {fmtLocal(r.startedAt)} · {num(r.peakTempC)} °C peak · {r.sampleCount.toLocaleString()} samples
                 {r.fittedK ? ` · k=${num(r.fittedK, 4)}` : ''}
               </option>
             ))}
@@ -291,7 +290,7 @@ export default function RunViewer({ machine }) {
             {indices.length.toLocaleString()} of {samples.length.toLocaleString()} samples ·{' '}
             {indices.length > 0 && (
               <>
-                {fmtStamp(samples[indices[0]].at)} → {fmtStamp(samples[indices[indices.length - 1]].at)}
+                {fmtLocal(samples[indices[0]].at)} → {fmtLocal(samples[indices[indices.length - 1]].at)}
               </>
             )}
             {timeline.gaps.length > 0 && ` · ${timeline.gaps.length} logging gap(s) collapsed`}
@@ -355,7 +354,7 @@ export default function RunViewer({ machine }) {
                     const s = samples[i]
                     return (
                       <tr key={i}>
-                        <th scope="row">{fmtStamp(s.at)}</th>
+                        <th scope="row">{fmtLocal(s.at)}</th>
                         <td>{num(s.tempA)}</td>
                         <td>{num(s.tempB)}</td>
                         <td>{num(s.tempC)}</td>

@@ -14,6 +14,29 @@ export const GAP_DISPLAY = 4
 
 export const asDate = (v) => (v instanceof Date ? v : new Date(String(v).replace(' ', 'T')))
 
+const p2 = (n) => String(n).padStart(2, '0')
+
+/**
+ * Format a Date as the wall clock it represents, for a timestamp column that
+ * carries no time zone.
+ *
+ * NOT toISOString(). The instrument export has no offset, so its times are
+ * parsed as local wall clock and stored in a `timestamp` column as-is.
+ * toISOString() converts to UTC, which would shift every reading by the
+ * machine's offset — writing 13:44 as 11:44 on import, and displaying 13:44 as
+ * 11:44 on the way back out. Both wrong, and consistently enough to look right.
+ */
+export function toSqlLocal(v) {
+  const d = asDate(v)
+  return (
+    `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` +
+    `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`
+  )
+}
+
+/** Wall clock to the minute, for display. */
+export const fmtLocal = (v) => toSqlLocal(v).slice(0, 16)
+
 /**
  * Build a display axis that keeps real durations within contiguous stretches
  * and compresses the holes between them.

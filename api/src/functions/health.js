@@ -43,6 +43,27 @@ app.http('health', {
         perMachine[p.machineId] = (perMachine[p.machineId] || 0) + 1
       }
 
+      // Which tables actually exist. A migration that was never applied looks
+      // from the outside exactly like a bug in the feature that needs it, so
+      // report it here rather than leave it to be inferred from a 500.
+      const tables = await query(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' ORDER BY table_name`,
+      )
+      const present = tables.rows.map((r) => r.table_name)
+      const missing = ['machines', 'curve_points', 'rules', 'equipment', 'runs', 'run_samples'].filter(
+        (t) => !present.includes(t),
+      )
+
+      let runCounts = null
+      if (!missing.includes('runs')) {
+        const r = await query(
+          `SELECT (SELECT count(*)::int FROM runs) AS runs,
+                  (SELECT count(*)::int FROM run_samples) AS samples`,
+        )
+        runCounts = r.rows[0]
+      }
+
       return {
         jsonBody: {
           ok: true,
@@ -55,6 +76,10 @@ app.http('health', {
             equipment: equipment.rows.length,
           },
           curvePointsPerMachine: perMachine,
+          tables: present,
+          missingTables: missing,
+          schemaComplete: missing.length === 0,
+          runs: runCounts,
           elapsedMs: Date.now() - started,
         },
       }
