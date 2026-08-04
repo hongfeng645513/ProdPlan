@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { num } from '../lib/format.js'
 import { buildTimeline, decimate, asDate, fmtLocal, GAP_DISPLAY } from '../lib/runView.js'
 import { curveFromRun, summary } from '../lib/curveFromRun.js'
+import { FURNACE_GROUPS, FORMATS } from '../lib/runImport.js'
 
 /**
  * View the imported runs for one furnace: temperatures, vacuum, pressure and
@@ -143,12 +144,39 @@ function Chart({ samples, indices, xs, gaps, xFrom, xTo, series, height, log, un
  * length and batch capacity from — so this alters every plan the furnace appears
  * in, and does so without anything looking obviously different afterwards.
  */
-function AdoptCurve({ machine, samples, runId, runLabel, canEdit, onChanged }) {
+/** Reference curves end where the furnace can be opened. */
+const UNLOAD_TARGET_C = 300
+
+/**
+ * The lowest temperature this furnace's instrument can actually measure.
+ *
+ * Derived from the export format rather than stored per run: it is a property
+ * of the instrument, not of a particular firing.
+ */
+function minValidTempFor(machineId) {
+  const group = FURNACE_GROUPS.find((g) => g.machines.includes(machineId))
+  return group ? FORMATS[group.format]?.minValidTempC ?? null : null
+}
+
+function AdoptCurve({ machine, samples, runId, runLabel, run, canEdit, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [done, setDone] = useState(null)
 
-  const built = useMemo(() => (samples?.length ? curveFromRun(samples) : null), [samples])
+  const built = useMemo(
+    () =>
+      samples?.length
+        ? curveFromRun(samples, {
+            minValidTempC: minValidTempFor(machine.id),
+            // Continue the modelled cool-down to the point the furnace can be
+            // opened, using this run's own fitted constant.
+            extendToC: minValidTempFor(machine.id) != null ? UNLOAD_TARGET_C : null,
+            k: run?.fittedK ?? null,
+            ambientC: 20,
+          })
+        : null,
+    [samples, run, machine.id],
+  )
   const next = useMemo(() => (built?.points?.length ? summary(built.points) : null), [built])
   const now = useMemo(() => summary(machine.measured), [machine.measured])
 
@@ -202,6 +230,8 @@ function AdoptCurve({ machine, samples, runId, runLabel, canEdit, onChanged }) {
         The run is resampled hourly from the mean of the three probes.
         {built.truncatedAtHours != null &&
           ` It stops at ${num(built.truncatedAtHours, 1)} h, where the chamber was back-filled — so the unload temperature becomes the temperature at which the furnace is actually opened.`}
+        {built.extrapolatedPoints > 0 &&
+          ` The last ${built.extrapolatedPoints} point(s) are modelled, not measured: this instrument stops reading at ${minValidTempFor(machine.id)} °C, so the cool-down is continued to ${UNLOAD_TARGET_C} °C with the run's own cooling constant.`}
       </p>
 
       <div className="table-wrap">
@@ -464,6 +494,7 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
             samples={samples}
             runId={runId}
             runLabel={run ? fmtLocal(run.startedAt) : ''}
+            run={run}
             canEdit={canEdit}
             onChanged={onChanged}
           />

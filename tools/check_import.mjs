@@ -250,9 +250,38 @@ check('element-off lands after the soak, not during the ramp',
   check('the two furnaces are not given the same constant',
     Math.abs(first.runs[0].fit.k - second.runs[0].fit.k) > 0.01,
     `${first.runs[0].fit.k} vs ${second.runs[0].fit.k}`)
-  check('a layout without vacuum says the fit was not cut at a vent',
-    first.warnings.some((w) => w.includes('no vacuum column')),
-    first.warnings.join(' | ') || 'no warning')
+  // These pyrometers cannot read below 1000 C — under that they pin near 790 —
+  // so the fit must stop there rather than treat an out-of-range instrument as
+  // a furnace that has stopped cooling.
+  check('the fit stops at the bottom of the instrument\'s range',
+    first.runs[0].fit?.truncatedBy?.includes('1000'),
+    first.runs[0].fit?.truncatedBy || 'not truncated')
+  check('the fit uses only readings the instrument can actually make',
+    first.runs[0].fit?.tempAtOff > 1000,
+    `anchored at ${first.runs[0].fit?.tempAtOff} C`)
+
+  // ...and the curve is continued by model from there down to the unload point,
+  // because that is the number the planner needs and no instrument supplies it.
+  const built = curveFromRun(
+    first.runs[0].samples,
+    { minValidTempC: 1000, extendToC: 300, k: first.runs[0].fit.k, ambientC: 20 },
+  )
+  const end = built.points[built.points.length - 1]
+  check('the curve is continued down to the unload temperature',
+    end.T === 300, `ends at ${end.T} C`)
+  check('the continuation is made of modelled points',
+    built.extrapolatedPoints > 0, `${built.extrapolatedPoints} modelled point(s)`)
+  check('the measured part stops at the instrument limit',
+    built.extrapolatedFrom != null &&
+      built.points.find((p) => p.t === built.extrapolatedFrom).T >= 1000,
+    `handover at ${built.extrapolatedFrom} h`)
+  check('the continuation extends the run rather than shortening it',
+    end.t > built.extrapolatedFrom, `${built.extrapolatedFrom} h -> ${end.t} h`)
+  check('times stay strictly increasing across the handover',
+    built.points.every((p, i) => i === 0 || p.t > built.points[i - 1].t))
+  check('the modelled tail is declared, not silently blended in',
+    built.warnings.some((w) => w.includes('modelled point')),
+    built.warnings.find((w) => w.includes('modelled point'))?.slice(0, 60) || 'no warning')
 }
 
 // --- malformed input ------------------------------------------------------

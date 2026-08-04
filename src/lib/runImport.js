@@ -51,6 +51,8 @@ export const FORMATS = {
     widthWithoutMs: 8,
     /** offsets are relative to the first data column, after any ms column */
     channels: [{ tempA: 0, tempB: 1, tempC: 2, setTemp: 3, vacuum: 4, pressure: 5, waterTemp: 6 }],
+    /** These thermocouples read all the way down, so nothing is discarded. */
+    minValidTempC: null,
   },
 
   /**
@@ -80,6 +82,14 @@ export const FORMATS = {
       { tempA: 0, setTemp: 1, waterTemp: 4, pressure: 7 }, // first furnace
       { tempA: 3, setTemp: 2, waterTemp: 5, pressure: 6 }, // second furnace
     ],
+    /**
+     * These pyrometers cannot measure below 1000 C. Under that they drift down
+     * to a pinned value around 790 and stay there, so readings below this are
+     * not cold measurements — they are the instrument having run out of range.
+     * The cooling fit uses nothing below it, and the reference curve continues
+     * from here by model rather than by measurement.
+     */
+    minValidTempC: 1000,
   },
 }
 
@@ -271,15 +281,29 @@ export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
       above = hot
     }
 
-    if (starts.length <= 1) {
+    if (!starts.length) {
       groups.push(g)
       continue
     }
-    // Keep whatever precedes the first firing with that firing, rather than
-    // emitting a lead-in segment that is only ever idle.
+
+    // Trim the idle lead-in.
+    //
+    // A run has to begin at the start of heating, because everything derived
+    // from the curve is measured from t = 0: a furnace that sat cold for forty
+    // hours before firing otherwise reports a forty-hour ramp, which is not a
+    // small error but a nonsensical one. A short pre-roll is kept so the start
+    // of the ramp is not clipped.
+    const PRE_ROLL_HOURS = 1
+    const trimTo = (startIndex) => {
+      const cutoff = g[startIndex].at.getTime() - PRE_ROLL_HOURS * 3600_000
+      let i = startIndex
+      while (i > 0 && g[i - 1].at.getTime() >= cutoff) i--
+      return i
+    }
+
     for (let s = 0; s < starts.length; s++) {
-      const from = s === 0 ? 0 : starts[s]
-      const to = s + 1 < starts.length ? starts[s + 1] : g.length
+      const from = trimTo(starts[s])
+      const to = s + 1 < starts.length ? trimTo(starts[s + 1]) : g.length
       if (to - from > 1) groups.push(g.slice(from, to))
     }
   }
@@ -389,7 +413,7 @@ export function ventIndex(rows, fromIndex = 0) {
   return -1
 }
 
-export function fitCooling(seg, { ambient = null } = {}) {
+export function fitCooling(seg, { ambient = null, minValidTemp = null } = {}) {
   if (!seg.fired || seg.heatOffIndex < 0) return null
 
   const tail = seg.rows.slice(seg.heatOffIndex)
@@ -453,7 +477,14 @@ export function fitCooling(seg, { ambient = null } = {}) {
       truncatedBy = 'vacuum broken — the chamber was back-filled and cooling switched to convection'
       break
     }
-    if (floorTemp != null && T <= floorTemp + READING_FLOOR_C && floorTemp > 100) {
+    // Below the instrument's stated range the reading is not a cold
+    // measurement, it is an instrument out of range. Stop rather than fit to it.
+    if (minValidTemp != null && T < minValidTemp) {
+      truncatedAt = Math.round(h * 100) / 100
+      truncatedBy = `the reading fell below ${minValidTemp} °C, which this instrument cannot measure`
+      break
+    }
+    if (minValidTemp == null && floorTemp != null && T <= floorTemp + READING_FLOOR_C && floorTemp > 100) {
       truncatedAt = Math.round(h * 100) / 100
       truncatedBy = `the reading reached the bottom of the instrument's range (~${Math.round(floorTemp)} °C) and stopped being a measurement`
       break
@@ -508,6 +539,7 @@ export function fitCooling(seg, { ambient = null } = {}) {
 export function readRuns(text, { gapHours = DEFAULT_GAP_HOURS, sourceFile = null, format = 'carbonization', channel = 0 } = {}) {
   const { rows, warnings, header } = parseCsv(text, format, channel)
   const segments = segment(rows, gapHours)
+  const minValidTemp = FORMATS[format]?.minValidTempC ?? null
 
   const runs = segments
     .filter((s) => s.fired)
@@ -519,7 +551,8 @@ export function readRuns(text, { gapHours = DEFAULT_GAP_HOURS, sourceFile = null
       setPointC: s.setPointC,
       heatOffAt: s.heatOffAt,
       hours: Math.round(s.hours * 10) / 10,
-      fit: fitCooling(s),
+      minValidTempC: minValidTemp,
+      fit: fitCooling(s, { minValidTemp }),
       samples: s.rows,
       sourceFile,
     }))

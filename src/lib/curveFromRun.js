@@ -35,7 +35,21 @@ const asMs = (v) => (v instanceof Date ? v.getTime() : new Date(String(v).replac
  * @param {boolean}  opts.truncateAtVent stop where the chamber is back-filled
  * @returns {{points: {t:number,T:number}[], warnings: string[], truncatedAtHours: number|null, usedSamples: number}}
  */
-export function curveFromRun(samples, { intervalHours = 1, truncateAtVent = true } = {}) {
+export function curveFromRun(
+  samples,
+  {
+    intervalHours = 1,
+    truncateAtVent = true,
+    /** Readings below this are the instrument out of range, not a cold furnace. */
+    minValidTempC = null,
+    /** Continue the modelled cool-down down to this temperature, then stop. */
+    extendToC = null,
+    /** Cooling constant used for that continuation — normally the run's own fit. */
+    k = null,
+    /** Ambient the cooling model relaxes towards. */
+    ambientC = null,
+  } = {},
+) {
   const warnings = []
   if (!samples?.length) return { points: [], warnings: ['The run has no samples.'], truncatedAtHours: null, usedSamples: 0 }
 
@@ -70,6 +84,26 @@ export function curveFromRun(samples, { intervalHours = 1, truncateAtVent = true
       )
     }
   }
+  // Cut where the instrument stops measuring.
+  //
+  // The graphitization pyrometers read nothing below 1000 C: under that they
+  // sag to a pinned value near 790 and sit there. Those samples are not a cold
+  // furnace, and a curve that includes them describes a furnace that stops
+  // cooling — so the measured part of the curve ends here, and the rest is
+  // continued by model below.
+  if (minValidTempC != null) {
+    const peakIndex = used.reduce((best, r, i) => (r.T > used[best].T ? i : best), 0)
+    const cut = used.findIndex((r, i) => i > peakIndex && r.T < minValidTempC)
+    if (cut > 0) {
+      const atH = Math.round(((used[cut].ms - used[0].ms) / 3600_000) * 100) / 100
+      used = used.slice(0, cut)
+      warnings.push(
+        `Measured data ends at ${atH} h, where the reading fell below ${minValidTempC} °C — ` +
+          'the bottom of what this instrument can measure.',
+      )
+    }
+  }
+
   if (used.length < 4) {
     return { points: [], warnings: ['Too little data before the chamber was opened.'], truncatedAtHours, usedSamples: 0 }
   }
@@ -107,8 +141,56 @@ export function curveFromRun(samples, { intervalHours = 1, truncateAtVent = true
 
   if (points.length < 4) warnings.push('The run is shorter than a few sampling intervals; the curve will be coarse.')
 
-  return { points, warnings, truncatedAtHours, usedSamples: used.length }
+  // Continue the cool-down by model, down to the unload temperature.
+  //
+  // The planner needs to know when the furnace can be opened, and on these
+  // furnaces that happens well below anything the instrument can see. So the
+  // curve is continued with the run's own fitted constant:
+  //
+  //     T(t) = Tamb + (Tlast - Tamb) * exp(-k * (t - tlast))
+  //
+  // Two honest caveats, both reported rather than buried. This tail is a model,
+  // not a measurement. And k was fitted where radiation dominates — heat loss
+  // goes as T^4 up there, not as the temperature difference Newton's law
+  // assumes — so applied lower down it cools FASTER than the furnace really
+  // will, which makes the predicted unload time optimistic rather than safe.
+  let extrapolatedFrom = null
+  let extrapolatedPoints = 0
+
+  if (extendToC != null && k > 0) {
+    const last = points[points.length - 1]
+    const amb = ambientC ?? Math.min(20, extendToC - 1)
+
+    if (last.T > extendToC && extendToC > amb) {
+      extrapolatedFrom = last.t
+      const excess = last.T - amb
+      const model = (h) => amb + excess * Math.exp(-k * (h - last.t))
+      const endsAt = last.t + Math.log(excess / (extendToC - amb)) / k
+
+      for (let h = last.t + intervalHours; h < endsAt - 1e-9; h += intervalHours) {
+        points.push({ t: Math.round(h * 100) / 100, T: Math.round(model(h) * 10) / 10 })
+        extrapolatedPoints++
+      }
+      // Land exactly on the unload temperature, so the curve ends where the
+      // furnace is actually openable rather than near it.
+      points.push({ t: Math.round(endsAt * 100) / 100, T: extendToC })
+      extrapolatedPoints++
+
+      warnings.push(
+        `Continued from ${num1(last.T)} °C at ${num1(last.t)} h down to ${extendToC} °C at ` +
+          `${num1(endsAt)} h using k = ${k} — ${extrapolatedPoints} modelled point(s), not measured. ` +
+          'k was fitted where radiation dominates, so this tail cools faster than the furnace really ' +
+          'will and the unload time is optimistic.',
+      )
+    } else if (last.T > extendToC) {
+      warnings.push(`No cooling constant available, so the curve stops at ${num1(last.T)} °C instead of ${extendToC} °C.`)
+    }
+  }
+
+  return { points, warnings, truncatedAtHours, usedSamples: used.length, extrapolatedFrom, extrapolatedPoints }
 }
+
+const num1 = (x) => Math.round(x * 10) / 10
 
 /**
  * What the planner would derive from a set of curve points — used to show the
