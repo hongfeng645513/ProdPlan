@@ -289,6 +289,8 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
   const [from, setFrom] = useState(0)
   const [to, setTo] = useState(1)
   const [showRows, setShowRows] = useState(false)
+  const [deleteNote, setDeleteNote] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   // Runs for this furnace.
   useEffect(() => {
@@ -384,6 +386,64 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
     )
   }
 
+  /**
+   * Delete the selected run and its samples.
+   *
+   * The impact is fetched first so the confirmation can state it rather than
+   * describe it vaguely — how many samples go, and whether any furnace's
+   * reference curve was built from this run. A curve outlives its run, so
+   * deleting the run leaves the curve in use with its provenance blanked, which
+   * is worth knowing before agreeing rather than after.
+   */
+  const deleteRun = async () => {
+    if (runId == null) return
+    setDeleteNote(null)
+    let impact = { samples: run?.sampleCount ?? 0, curveFor: [] }
+    try {
+      const res = await fetch(`api/runs/${runId}`)
+      if (res.ok) impact = await res.json()
+    } catch {
+      /* fall back to what the list already told us */
+    }
+
+    const curveWarning = impact.curveFor?.length
+      ? `
+
+WARNING: ${impact.curveFor.map((m) => m.name).join(' and ')} still use the reference curve built ` +
+        'from this run. The curve keeps working, but it will no longer record where it came from.'
+      : ''
+    if (!confirm(
+      `Delete the run of ${run ? fmtLocal(run.startedAt) : runId} for ${machine.name}?
+
+` +
+        `${(impact.samples || 0).toLocaleString()} samples will be deleted. This cannot be undone.${curveWarning}`,
+    )) return
+
+    setDeleting(true)
+    try {
+      const res = await fetch(`api/runs/${runId}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (res.status === 403) throw new Error('You do not have the editor role.')
+      if (!res.ok) throw new Error(body.error || body.reason || `Failed (${res.status})`)
+
+      setDeleteNote({
+        ok: true,
+        text: `Run deleted — ${(body.samples || 0).toLocaleString()} samples removed.`,
+        warnings: body.warnings || [],
+      })
+      // Drop it from the list and move to whatever remains.
+      const remaining = runs.filter((r) => String(r.id) !== String(runId))
+      setRuns(remaining)
+      setRunId(remaining.length ? remaining[0].id : null)
+      setSamples(null)
+      if (onChanged) await onChanged()
+    } catch (err) {
+      setDeleteNote({ ok: false, text: err.message })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const preset = (a, b) => () => { setFrom(a); setTo(b) }
   const heatOffFraction = () => {
     if (!run?.heatOffAt || !timeline || !samples?.length) return null
@@ -423,6 +483,15 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
             ))}
           </select>
         </label>
+        {canEdit && (
+          <label>
+            Remove this run
+            <button className="btn btn-danger" onClick={deleteRun} disabled={deleting || runId == null}>
+              {deleting ? 'Deleting…' : 'Delete run'}
+            </button>
+            <span className="hint">Deletes its samples too. Cannot be undone.</span>
+          </label>
+        )}
         <label>
           Interval start
           <input type="range" min="0" max="1" step="0.005" value={from} onChange={(e) => setFrom(+e.target.value)} />
@@ -432,6 +501,17 @@ export default function RunViewer({ machine, canEdit, onChanged }) {
           <input type="range" min="0" max="1" step="0.005" value={to} onChange={(e) => setTo(+e.target.value)} />
         </label>
       </div>
+
+      {deleteNote && (
+        <div className={deleteNote.ok ? 'notice notice-ok' : 'notice notice-error'}>
+          <strong>{deleteNote.text}</strong>
+          {deleteNote.warnings?.length > 0 && (
+            <ul className="notice-list">
+              {deleteNote.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="filters run-presets">
         <button onClick={preset(0, 1)}>Whole run</button>

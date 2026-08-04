@@ -30,17 +30,58 @@ app.http('runs', {
   },
 })
 
+/**
+ * Delete a run and everything measured during it.
+ *
+ * Samples go with it by cascade. What does NOT go with it is any reference
+ * curve built from it: the curve stays in use and its provenance link is set to
+ * null, leaving a furnace whose phases, cooling and cycle time derive from a run
+ * that no longer exists. That is recoverable but confusing to meet later, so it
+ * is reported before and after rather than discovered.
+ */
 app.http('runById', {
-  methods: ['DELETE'],
+  methods: ['GET', 'DELETE'],
   authLevel: 'anonymous',
   route: 'runs/{id}',
   handler: async (request, context) => {
+    const id = Number(request.params.id)
+    if (!Number.isInteger(id)) return json(400, { error: 'run id must be an integer' })
+
     try {
-      const id = Number(request.params.id)
-      if (!Number.isInteger(id)) return json(400, { error: 'run id must be an integer' })
+      // What deleting this would cost, so the UI can say so before asking.
+      const impact = async () => {
+        const [samples, curves] = await Promise.all([
+          query('SELECT count(*)::int AS n FROM run_samples WHERE run_id = $1', [id]),
+          query(
+            `SELECT id, name, curve_source_label AS label
+             FROM machines WHERE curve_source_run_id = $1`,
+            [id],
+          ),
+        ])
+        return { samples: samples.rows[0].n, curveFor: curves.rows }
+      }
+
+      if (request.method === 'GET') {
+        const run = await query(
+          `SELECT id::int AS id, machine_id AS "machineId",
+                  to_char(started_at, 'YYYY-MM-DD HH24:MI') AS "startedAt"
+           FROM runs WHERE id = $1`,
+          [id],
+        )
+        if (!run.rowCount) return json(404, { error: `no run ${id}` })
+        return json(200, { ...run.rows[0], ...(await impact()) })
+      }
+
+      const before = await impact()
       const res = await query('DELETE FROM runs WHERE id = $1', [id])
       if (!res.rowCount) return json(404, { error: `no run ${id}` })
-      return json(200, { id, deleted: true })
+
+      const warnings = before.curveFor.map(
+        (m) =>
+          `${m.name} still uses the reference curve built from this run — the curve is unchanged, ` +
+          'but it no longer records where it came from. Rebuild it from another run to restore that.',
+      )
+      return json(200, { id, deleted: true, samples: before.samples, warnings })
     } catch (err) {
       context.error('run delete failed', err)
       return json(500, { error: 'delete failed', reason: String(err.message || err).slice(0, 200) })
