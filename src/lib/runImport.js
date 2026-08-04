@@ -25,6 +25,72 @@
 /** A gap longer than this starts a new run. Hours. */
 export const DEFAULT_GAP_HOURS = 4
 
+/**
+ * The export layouts, by furnace type.
+ *
+ * Columns are read by POSITION, not by header name. The carbonization export
+ * heads its temperature columns 低温测量值 ("low temperature") because those
+ * furnaces run to 1000 C; the graphitization furnaces run to 2800 C and will not
+ * use the same words. Matching on those strings would work perfectly until the
+ * first Furnace 1 file.
+ *
+ * `msColumn` is the awkward part. The Furnace 3 export carries an MCGS_TIMEMS
+ * column between the timestamp and the data — undocumented, and if it is not
+ * counted every field after it lands one place to the left, which reads as
+ * plausible numbers in the wrong columns rather than as an error. Both layouts
+ * therefore declare their column count with and without it, and the parser
+ * decides from the header row which it is looking at.
+ */
+export const FORMATS = {
+  /** Furnaces 3 and 4: one furnace per file, three probes, vacuum gauge. */
+  carbonization: {
+    id: 'carbonization',
+    label: 'Furnace 3 or 4 (one furnace per file)',
+    furnaces: 1,
+    widthWithMs: 9,
+    widthWithoutMs: 8,
+    /** offsets are relative to the first data column, after any ms column */
+    channels: [{ tempA: 0, tempB: 1, tempC: 2, setTemp: 3, vacuum: 4, pressure: 5, waterTemp: 6 }],
+  },
+
+  /**
+   * Furnaces 1+2 and 5+6: two furnaces share one file.
+   *
+   * The layout is asymmetric and easy to transcribe wrongly, so it is written
+   * out rather than derived:
+   *
+   *   0 first furnace  measured temperature
+   *   1 first furnace  set temperature
+   *   2 second furnace SET temperature      <- set and measured are the other
+   *   3 second furnace MEASURED temperature <- way round for the second furnace
+   *   4 first furnace  water temperature
+   *   5 second furnace water temperature
+   *   6 second furnace pressure             <- pressures are second-then-first,
+   *   7 first furnace  pressure             <- the reverse of the water columns
+   *
+   * There is no vacuum column, which is why `ventIndex` falls back to pressure.
+   */
+  graphitization: {
+    id: 'graphitization',
+    label: 'Furnaces 1+2 or 5+6 (two furnaces per file)',
+    furnaces: 2,
+    widthWithMs: 10,
+    widthWithoutMs: 9,
+    channels: [
+      { tempA: 0, setTemp: 1, waterTemp: 4, pressure: 7 }, // first furnace
+      { tempA: 3, setTemp: 2, waterTemp: 5, pressure: 6 }, // second furnace
+    ],
+  },
+}
+
+/** Which furnaces each file covers, in the order the format's channels are listed. */
+export const FURNACE_GROUPS = [
+  { id: 'furnace-1-2', label: 'Furnace 1 and 2', format: 'graphitization', machines: ['furnace-1', 'furnace-2'] },
+  { id: 'furnace-3', label: 'Furnace 3', format: 'carbonization', machines: ['furnace-3'] },
+  { id: 'furnace-4', label: 'Furnace 4', format: 'carbonization', machines: ['furnace-4'] },
+  { id: 'furnace-5-6', label: 'Furnace 5 and 6', format: 'graphitization', machines: ['furnace-5', 'furnace-6'] },
+]
+
 /** Below this peak, with no set point, a segment is idle logging rather than a firing. */
 const IDLE_PEAK_C = 60
 
@@ -51,7 +117,10 @@ const num = (v) => {
  * Never throws on a bad line — a single malformed row in 20 000 should not
  * lose the import, so bad rows are counted and reported.
  */
-export function parseCsv(text) {
+export function parseCsv(text, formatId = 'carbonization', channel = 0) {
+  const format = FORMATS[formatId]
+  if (!format) return { rows: [], warnings: [`Unknown format "${formatId}".`], header: [] }
+
   const warnings = []
   // Excel and MCGS both like a BOM; left in place it corrupts the first header.
   const clean = text.replace(/^﻿/, '')
@@ -59,31 +128,49 @@ export function parseCsv(text) {
   if (!lines.length) return { rows: [], warnings: ['The file is empty.'], header: [] }
 
   const header = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim())
-  if (header.length !== EXPECTED_COLUMNS) {
+
+  // Decide whether the millisecond column is present from the width, and
+  // corroborate with the header text where it names itself.
+  let dataStart
+  if (header.length === format.widthWithMs) dataStart = 2
+  else if (header.length === format.widthWithoutMs) dataStart = 1
+  else {
+    dataStart = /ms$/i.test(header[1] || '') ? 2 : 1
     warnings.push(
-      `Expected ${EXPECTED_COLUMNS} columns, found ${header.length}. ` +
-        'Columns are read by position, so a different layout will import the wrong values.',
+      `Expected ${format.widthWithoutMs} or ${format.widthWithMs} columns for this layout, found ${header.length}. ` +
+        'Columns are read by position, so check the values below before importing — a different layout ' +
+        'puts plausible numbers in the wrong fields rather than failing outright.',
     )
   }
+  if (dataStart === 2 && !/ms$/i.test(header[1] || '')) {
+    warnings.push(
+      `Treating column 2 ("${header[1]}") as a milliseconds column and ignoring it, based on the column count.`,
+    )
+  }
+
+  const map = format.channels[channel]
+  if (!map) return { rows: [], warnings: [`This layout has no furnace ${channel + 1}.`], header }
+  const minWidth = dataStart + Math.max(...Object.values(map)) + 1
 
   const rows = []
   let bad = 0
   for (let i = 1; i < lines.length; i++) {
     const c = lines[i].split(',')
     const at = parseTimestamp(c[0])
-    if (!at || c.length < EXPECTED_COLUMNS) {
+    if (!at || c.length < minWidth) {
       bad++
       continue
     }
+    const pick = (key) => (map[key] == null ? null : num(c[dataStart + map[key]]))
     rows.push({
       at,
-      tempA: num(c[2]),
-      tempB: num(c[3]),
-      tempC: num(c[4]),
-      setTemp: num(c[5]),
-      vacuum: num(c[6]),
-      pressure: num(c[7]),
-      waterTemp: num(c[8]),
+      tempA: pick('tempA'),
+      tempB: pick('tempB'),
+      tempC: pick('tempC'),
+      setTemp: pick('setTemp'),
+      vacuum: pick('vacuum'),
+      pressure: pick('pressure'),
+      waterTemp: pick('waterTemp'),
     })
   }
 
@@ -212,11 +299,17 @@ export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
  * both cut at the same place.
  */
 export function ventIndex(rows, fromIndex = 0) {
-  const maxVacuum = Math.max(...rows.map((r) => r.vacuum ?? 0))
-  if (!(maxVacuum > 1000)) return -1
-  const ventAbove = maxVacuum * 0.1
-  for (let i = Math.max(0, fromIndex); i < rows.length; i++) {
-    if ((rows[i].vacuum ?? 0) > ventAbove) return i
+  // Vacuum first. The graphitization export has no vacuum column, so pressure
+  // stands in — the signal being looked for is the same either way: the reading
+  // jumping by orders of magnitude as the chamber returns to atmosphere.
+  for (const key of ['vacuum', 'pressure']) {
+    const values = rows.map((r) => r[key] ?? 0)
+    const max = Math.max(...values)
+    if (!(max > 1000)) continue
+    const above = max * 0.1
+    for (let i = Math.max(0, fromIndex); i < rows.length; i++) {
+      if (values[i] > above) return i
+    }
   }
   return -1
 }
@@ -322,8 +415,8 @@ export function fitCooling(seg, { ambient = null } = {}) {
  * Pure — no network, no database — so the same code runs in the browser for the
  * preview and under Node in the tests.
  */
-export function readRuns(text, { gapHours = DEFAULT_GAP_HOURS, sourceFile = null } = {}) {
-  const { rows, warnings, header } = parseCsv(text)
+export function readRuns(text, { gapHours = DEFAULT_GAP_HOURS, sourceFile = null, format = 'carbonization', channel = 0 } = {}) {
+  const { rows, warnings, header } = parseCsv(text, format, channel)
   const segments = segment(rows, gapHours)
 
   const runs = segments
@@ -352,6 +445,23 @@ export function readRuns(text, { gapHours = DEFAULT_GAP_HOURS, sourceFile = null
   if (noFit) {
     warnings.push(`${noFit} run(s) have no usable cooling branch, so no cooling constant was fitted.`)
   }
+  // Without a signal for the chamber returning to atmosphere, a fit can span two
+  // different cooling mechanisms and still look convincing. Say so.
+  const unvented = runs.filter((r) => r.fit && !r.fit.truncatedBy).length
+  if (unvented && runs.some((r) => r.samples.every((s) => s.vacuum == null))) {
+    warnings.push(
+      `${unvented} fit(s) were not cut at a chamber vent — this layout has no vacuum column, so the ` +
+        'cooling constant may span both the sealed and the opened phase. Check the fit error before trusting it.',
+    )
+  }
 
-  return { runs, idleSegments: idle.length, warnings, header, totalRows: rows.length }
+  return {
+    runs,
+    idleSegments: idle.length,
+    warnings,
+    header,
+    totalRows: rows.length,
+    format,
+    channel,
+  }
 }

@@ -167,6 +167,94 @@ check('element-off lands after the soak, not during the ramp',
     r.warnings.join(' | ') || 'no warning')
 }
 
+// --- the two-furnace graphitization layout --------------------------------
+//
+// This layout is asymmetric in two places and both are easy to transcribe
+// backwards, with no symptom except a furnace quietly described by its
+// neighbour's numbers:
+//
+//   the first furnace is measured-then-set, the second is SET-then-measured
+//   water temperatures run first-then-second, pressures run SECOND-then-first
+//
+// So the assertions below check that each channel picks up its own values and
+// not the other furnace's.
+{
+  const head =
+    '"MCGS_TIME","MCGS_TIMEMS","F1 measured","F1 set","F2 set","F2 measured","F1 water","F2 water","F2 pressure","F1 pressure"'
+  // distinct values per field so a mis-mapped column is unmistakable
+  const line = '2025/11/18 12:48:00,600,1111.0,1000.0,2000.0,2222.0,31.0,32.0,62.0,61.0'
+  const a = parseCsv([head, line].join('\n'), 'graphitization', 0)
+  const b = parseCsv([head, line].join('\n'), 'graphitization', 1)
+
+  check('first furnace takes its own measured temperature', a.rows[0].tempA === 1111, String(a.rows[0].tempA))
+  check('first furnace takes its own set point', a.rows[0].setTemp === 1000, String(a.rows[0].setTemp))
+  check('second furnace takes its own measured temperature', b.rows[0].tempA === 2222, String(b.rows[0].tempA))
+  check('second furnace takes its own set point — not the first one\'s', b.rows[0].setTemp === 2000, String(b.rows[0].setTemp))
+  check('water temperatures are first-then-second',
+    a.rows[0].waterTemp === 31 && b.rows[0].waterTemp === 32,
+    `${a.rows[0].waterTemp} / ${b.rows[0].waterTemp}`)
+  check('pressures are second-then-first, the reverse of water',
+    a.rows[0].pressure === 61 && b.rows[0].pressure === 62,
+    `${a.rows[0].pressure} / ${b.rows[0].pressure}`)
+  check('no vacuum channel in this layout', a.rows[0].vacuum === null && b.rows[0].vacuum === null)
+  check('the millisecond column is not read as data',
+    ![a.rows[0].tempA, a.rows[0].setTemp, a.rows[0].waterTemp, a.rows[0].pressure].includes(600))
+
+  // ...and the same file with no millisecond column must map identically.
+  const headNoMs = '"MCGS_TIME","F1 measured","F1 set","F2 set","F2 measured","F1 water","F2 water","F2 pressure","F1 pressure"'
+  const lineNoMs = '2025/11/18 12:48:00,1111.0,1000.0,2000.0,2222.0,31.0,32.0,62.0,61.0'
+  const c = parseCsv([headNoMs, lineNoMs].join('\n'), 'graphitization', 0)
+  const d = parseCsv([headNoMs, lineNoMs].join('\n'), 'graphitization', 1)
+  check('a file without the millisecond column maps the same',
+    c.rows[0].tempA === 1111 && c.rows[0].setTemp === 1000 && c.rows[0].pressure === 61 &&
+      d.rows[0].tempA === 2222 && d.rows[0].pressure === 62,
+    `${c.rows[0].tempA}/${c.rows[0].pressure} · ${d.rows[0].tempA}/${d.rows[0].pressure}`)
+  check('and does so without a column-count warning',
+    c.warnings.length === 0, c.warnings.join(' | '))
+}
+
+// --- a paired file yields a run per furnace -------------------------------
+{
+  const head =
+    '"MCGS_TIME","MCGS_TIMEMS","F1 measured","F1 set","F2 set","F2 measured","F1 water","F2 water","F2 pressure","F1 pressure"'
+  const lines = [head]
+  const t0 = new Date(2025, 10, 18, 12, 48, 0).getTime()
+  const amb = 20
+  // two furnaces cooling at genuinely different rates
+  const kA = 0.12
+  const kB = 0.08
+  const row = (h, ta, sa, sb, tb, p) => {
+    const at = new Date(t0 + h * 3600_000)
+    lines.push(`${stamp(at)},600,${ta.toFixed(3)},${sa.toFixed(3)},${sb.toFixed(3)},${tb.toFixed(3)},30.000,31.000,${p.toFixed(3)},${p.toFixed(3)}`)
+  }
+  const peak = 2800
+  for (let h = 0; h < 12; h += 30 / 3600) {
+    const T = amb + (peak - amb) * (h / 12)
+    row(h, T, peak, peak, T, 1)
+  }
+  for (let h = 12; h < 13; h += 30 / 3600) row(h, peak, peak, peak, peak, 1)
+  for (let h = 0; h <= 18; h += 30 / 3600) {
+    row(13 + h, amb + (peak - amb) * Math.exp(-kA * h), 0, 0, amb + (peak - amb) * Math.exp(-kB * h), 1)
+  }
+
+  const text = lines.join('\n')
+  const first = readRuns(text, { format: 'graphitization', channel: 0 })
+  const second = readRuns(text, { format: 'graphitization', channel: 1 })
+
+  check('a run is found for each furnace in the file',
+    first.runs.length === 1 && second.runs.length === 1,
+    `${first.runs.length} / ${second.runs.length}`)
+  check('each furnace fits its own cooling constant',
+    Math.abs(first.runs[0].fit.k - kA) / kA < 0.03 && Math.abs(second.runs[0].fit.k - kB) / kB < 0.03,
+    `${first.runs[0].fit?.k} vs ${kA}, ${second.runs[0].fit?.k} vs ${kB}`)
+  check('the two furnaces are not given the same constant',
+    Math.abs(first.runs[0].fit.k - second.runs[0].fit.k) > 0.01,
+    `${first.runs[0].fit.k} vs ${second.runs[0].fit.k}`)
+  check('a layout without vacuum says the fit was not cut at a vent',
+    first.warnings.some((w) => w.includes('no vacuum column')),
+    first.warnings.join(' | ') || 'no warning')
+}
+
 // --- malformed input ------------------------------------------------------
 const junk = parseCsv('"MCGS_TIME","MCGS_TIMEMS","a","b","c","d","e","f","g"\nnot,a,valid,row\n')
 check('a malformed row is skipped, not fatal', junk.rows.length === 0 && junk.warnings.length > 0)
