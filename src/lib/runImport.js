@@ -235,27 +235,92 @@ export function probeMean(row) {
 export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
   if (!rows.length) return []
   const gapMs = gapHours * 3600_000
-  const groups = []
+  const timeGroups = []
   let cur = [rows[0]]
 
   for (let i = 1; i < rows.length; i++) {
     if (rows[i].at - rows[i - 1].at > gapMs) {
-      groups.push(cur)
+      timeGroups.push(cur)
       cur = []
     }
     cur.push(rows[i])
   }
-  groups.push(cur)
+  timeGroups.push(cur)
+
+  // Split again on firings.
+  //
+  // Gaps alone are not enough. The carbonization logger stops between batches,
+  // so its gaps happen to line up with its runs — but the graphitization logger
+  // never stops, and a week of it arrives as one unbroken block holding two
+  // firings and five days of the furnace sitting cold. Segmenting that by time
+  // alone produces "runs" of eighty hours that are mostly idle, which is not
+  // wrong so much as meaningless.
+  //
+  // A firing starts when the set point climbs away from its idle baseline. Each
+  // one runs until the next begins, so the cool-down stays attached to the batch
+  // that produced it.
+  const groups = []
+  for (const g of timeGroups) {
+    const baseline = Math.min(...g.map((r) => r.setTemp ?? 0))
+    const margin = 100
+    const starts = []
+    let above = false
+    for (let i = 0; i < g.length; i++) {
+      const hot = (g[i].setTemp ?? 0) > baseline + margin
+      if (hot && !above) starts.push(i)
+      above = hot
+    }
+
+    if (starts.length <= 1) {
+      groups.push(g)
+      continue
+    }
+    // Keep whatever precedes the first firing with that firing, rather than
+    // emitting a lead-in segment that is only ever idle.
+    for (let s = 0; s < starts.length; s++) {
+      const from = s === 0 ? 0 : starts[s]
+      const to = s + 1 < starts.length ? starts[s + 1] : g.length
+      if (to - from > 1) groups.push(g.slice(from, to))
+    }
+  }
 
   return groups.map((g) => {
-    const peak = Math.max(...g.map((r) => probeMean(r) ?? -Infinity))
-    const setPoint = Math.max(...g.map((r) => r.setTemp ?? 0))
-    const fired = setPoint > 0 && peak > IDLE_PEAK_C
+    const temps = g.map((r) => probeMean(r)).filter((x) => x != null)
+    const peak = temps.length ? Math.max(...temps) : -Infinity
+    const floorTemp = temps.length ? Math.min(...temps) : null
 
-    // Element off: the first sample where the set point falls away to nothing.
+    // Set points are read RELATIVE TO THEIR OWN BASELINE, not against zero.
+    //
+    // The carbonization controller drops its set point to 0 when the element
+    // goes off. The graphitization controllers do not: they fall back to an idle
+    // set point of 1000 and sit there. Testing against zero finds no heat-off at
+    // all on those furnaces, which silently means no cooling fit rather than a
+    // wrong one — easy to miss, since the runs still import.
+    const setBaseline = Math.min(...g.map((r) => r.setTemp ?? 0))
+    const setPoint = Math.max(...g.map((r) => r.setTemp ?? 0))
+    const SET_MARGIN = 100
+
+    // Likewise the idle *temperature* is not ambient. The graphitization
+    // pyrometer cannot read below about 790 C and pins there whenever the
+    // furnace is cold, so "did it get hot" has to be judged against the reading
+    // floor rather than against room temperature.
+    const fired =
+      setPoint > setBaseline + SET_MARGIN &&
+      floorTemp != null &&
+      peak > Math.max(floorTemp + IDLE_PEAK_C, IDLE_PEAK_C)
+
+    // Element off: the set point returning to its baseline, looked for only
+    // after it has actually climbed above it, so a wobble during the ramp
+    // cannot be mistaken for the end of the soak.
     let heatOffIndex = -1
+    let climbed = false
     for (let i = 1; i < g.length; i++) {
-      if ((g[i].setTemp ?? 0) === 0 && (g[i - 1].setTemp ?? 0) > 0) {
+      const set = g[i].setTemp ?? 0
+      if (set > setBaseline + SET_MARGIN) {
+        climbed = true
+        continue
+      }
+      if (climbed && set <= setBaseline + SET_MARGIN) {
         heatOffIndex = i
         break
       }
@@ -268,6 +333,8 @@ export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
       sampleCount: g.length,
       peakTempC: Number.isFinite(peak) ? peak : null,
       setPointC: setPoint,
+      setBaselineC: setBaseline,
+      floorTempC: floorTemp,
       fired,
       heatOffIndex,
       heatOffAt: heatOffIndex >= 0 ? g[heatOffIndex].at : null,
@@ -299,15 +366,23 @@ export function segment(rows, gapHours = DEFAULT_GAP_HOURS) {
  * both cut at the same place.
  */
 export function ventIndex(rows, fromIndex = 0) {
-  // Vacuum first. The graphitization export has no vacuum column, so pressure
-  // stands in — the signal being looked for is the same either way: the reading
-  // jumping by orders of magnitude as the chamber returns to atmosphere.
+  // Vacuum first; pressure stands in where there is no vacuum column. Either
+  // way the signal is the same: the reading jumping as the chamber returns to
+  // atmosphere.
+  //
+  // The guard matters more than the detection. On the graphitization export
+  // pressure sits near atmospheric for the whole run — those furnaces are not
+  // held under vacuum the way the carbonization ones are — so a naive threshold
+  // fires on the very first sample and truncates the cooling branch to nothing.
+  // A vent is only a vent if the chamber was sealed to begin with.
+  const start = Math.max(0, fromIndex)
   for (const key of ['vacuum', 'pressure']) {
     const values = rows.map((r) => r[key] ?? 0)
     const max = Math.max(...values)
     if (!(max > 1000)) continue
     const above = max * 0.1
-    for (let i = Math.max(0, fromIndex); i < rows.length; i++) {
+    if (!(values[start] < above)) continue // never sealed: nothing to detect
+    for (let i = start; i < rows.length; i++) {
       if (values[i] > above) return i
     }
   }
@@ -349,11 +424,21 @@ export function fitCooling(seg, { ambient = null } = {}) {
   // fixed number, because the instrument's units are not guaranteed to be the
   // same on every furnace.
   const REHEAT_C = 5
-  const maxVacuum = Math.max(...seg.rows.map((r) => r.vacuum ?? 0))
-  const ventAbove = maxVacuum > 1000 ? maxVacuum * 0.1 : Infinity
+  const vent = ventIndex(seg.rows, seg.heatOffIndex)
+  const ventAtMs = vent > 0 ? seg.rows[vent].at.getTime() : null
+
+  // The reading floor.
+  //
+  // The graphitization pyrometer cannot measure below about 790 C and pins
+  // there whenever the furnace is cold — 60 to 80% of a week-long export is that
+  // pinned value. Fitting through it says the furnace stopped cooling for days,
+  // which drags k towards zero and reads as a furnace that never loses heat.
+  // The branch therefore ends where the reading stops being a measurement.
+  const READING_FLOOR_C = 5
+  const floorTemp = seg.floorTempC
 
   const usable = []
-  let floor = Infinity
+  let lowestSoFar = Infinity
   let truncatedAt = null
   let truncatedBy = null
 
@@ -363,17 +448,22 @@ export function fitCooling(seg, { ambient = null } = {}) {
     const h = (r.at.getTime() - tOffMs) / 3600_000
     if (h <= 0) continue
 
-    if ((r.vacuum ?? 0) > ventAbove) {
+    if (ventAtMs != null && r.at.getTime() >= ventAtMs) {
       truncatedAt = Math.round(h * 100) / 100
       truncatedBy = 'vacuum broken — the chamber was back-filled and cooling switched to convection'
       break
     }
-    if (T > floor + REHEAT_C) {
+    if (floorTemp != null && T <= floorTemp + READING_FLOOR_C && floorTemp > 100) {
+      truncatedAt = Math.round(h * 100) / 100
+      truncatedBy = `the reading reached the bottom of the instrument's range (~${Math.round(floorTemp)} °C) and stopped being a measurement`
+      break
+    }
+    if (T > lowestSoFar + REHEAT_C) {
       truncatedAt = Math.round(h * 100) / 100
       truncatedBy = 'the furnace was re-fired before it finished cooling'
       break
     }
-    floor = Math.min(floor, T)
+    lowestSoFar = Math.min(lowestSoFar, T)
 
     if (T - amb <= 1) continue
     usable.push({ h, T })
