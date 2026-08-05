@@ -243,6 +243,9 @@ export function buildMachine(source) {
 export function parseRules(sentences) {
   const exclusive = []
   const support = []
+  // Furnaces to load first when several are free at once, most preferred first.
+  const preferred = []
+  const preferredText = []
   const coating = {}
   const raw = []
   let loadHours = null
@@ -301,6 +304,30 @@ export function parseRules(sentences) {
       continue
     }
 
+    // "Run Furnace 1 first" / "Prefer furnace 5" / "Furnace 2 has priority"
+    //
+    // Checked before the load/unload branches, because "Load furnace 1 first"
+    // contains the word "load" and would otherwise be read as a statement about
+    // how long loading takes.
+    // No regex here on purpose: word-boundary escapes have a habit of not
+    // surviving the trip through tooling, and a broken \b matches nothing at
+    // all rather than failing loudly. Substring tests cannot rot that way.
+    const SAYS_FIRST = ['first', 'priorit', 'prefer', 'beginning', 'earliest', 'to begin with']
+    const SAYS_RUN = ['run', 'use', 'prefer', 'load', 'start', 'schedule', 'has', 'have']
+    if (
+      low.includes('furnace') &&
+      SAYS_FIRST.some((w) => low.includes(w)) &&
+      SAYS_RUN.some((w) => low.includes(w))
+    ) {
+      const names = low.match(/furnace\s*\d+/g) || []
+      if (names.length) {
+        for (const n of names.map(slug)) if (!preferred.includes(n)) preferred.push(n)
+        preferredText.push(line)
+        raw.push({ text: line, parsed: true })
+        continue
+      }
+    }
+
     // "Furnace 1 and Furnace 2 cannot heat at the same time"
     if (/\b(cannot|can not|can't|must not|never)\b/.test(low) && low.includes('same time')) {
       const names = low.match(/furnace\s*\d+/g) || []
@@ -332,6 +359,10 @@ export function parseRules(sentences) {
     coating,
     loadHours: loadHours ?? 0.0,
     unloadHours: unloadHours ?? 0.0,
+    // Added only when a preference was actually expressed, so a workbook-derived
+    // payload stays byte-identical to what convert_excel.py produces — which is
+    // what check_derive.mjs asserts.
+    ...(preferred.length ? { preferredMachines: preferred, preferredText } : {}),
   }
 }
 

@@ -214,6 +214,14 @@ export function planProduction({
   if (startWipHolders > 0) arrivals.push({ t: 0, holders: startWipHolders })
 
   const batchCount = new Map(pool.map((m) => [m.id, 0]))
+
+  // Furnaces the rules ask to be loaded first, most preferred at rank 0.
+  // Everything unlisted ranks last and therefore never displaces a preference.
+  const preferredOrder = rules?.preferredMachines || []
+  const rankOf = (id) => {
+    const i = preferredOrder.indexOf(id)
+    return i < 0 ? Number.POSITIVE_INFINITY : i
+  }
   const batches = []
   let consumedHolders = 0
   let gfGrams = 0
@@ -278,6 +286,22 @@ export function planProduction({
         if (end > ceiling + EPS) continue
 
         const cand = { machine: m, tpl, start: est, end, brokeCoating: relax }
+
+        // A preferred furnace wins when it could start at the same moment.
+        //
+        // "Run Furnace 1 first" means: given the choice, load that one. It does
+        // NOT mean it wins every round — a furnace is a candidate again as soon
+        // as its previous batch ends, so an unconditional preference would hand
+        // it batch after batch and leave the rest of the line idle. Tying the
+        // preference to an equal start time gives it first pick at the top of
+        // the plan, and lets the others have their turn once it is busy, which
+        // is what the sentence actually describes.
+        const sameStart = best && Math.abs(cand.start - best.start) < EPS
+        if (best && sameStart && rankOf(cand.machine.id) !== rankOf(best.machine.id)) {
+          if (rankOf(cand.machine.id) < rankOf(best.machine.id)) best = cand
+          continue
+        }
+
         // Earliest finish wins. On a tie, prefer the bigger furnace — feedstock
         // is usually the scarce thing, so the same holders are worth more in a
         // 3-holder furnace — and then the furnace that has run least, which
