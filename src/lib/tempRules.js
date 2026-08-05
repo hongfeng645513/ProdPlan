@@ -93,6 +93,20 @@ export function mergeRules(base, extra) {
     coating: { ...(base.coating || {}), ...(extra.coating || {}) },
     loadHours: extra.loadHours > 0 ? extra.loadHours : base.loadHours,
     unloadHours: extra.unloadHours > 0 ? extra.unloadHours : base.unloadHours,
+    // Furnace preferences accumulate, temporary ones ranking ahead of any
+    // stored preference: a rule typed for this plan is the more recent
+    // instruction. Omitted entirely when neither side expressed one, so the
+    // merged block keeps the shape the parser produces.
+    ...(extra.preferredMachines?.length || base.preferredMachines?.length
+      ? {
+          preferredMachines: [
+            ...(extra.preferredMachines || []),
+            ...(base.preferredMachines || []).filter(
+              (id) => !(extra.preferredMachines || []).includes(id),
+            ),
+          ],
+        }
+      : {}),
   }
 }
 
@@ -122,6 +136,14 @@ export function describeRule(text, machines = []) {
   }
   if (p.coating.priority === 'high') {
     return { ok: true, text: 'Coating line is kept running; furnaces are pushed later instead.' }
+  }
+  if (p.preferredMachines?.length) {
+    return {
+      ok: true,
+      text:
+        `${p.preferredMachines.map(nameOf).join(', then ')} will be loaded first whenever ` +
+        'more than one furnace is free at the same moment.',
+    }
   }
   if (p.loadHours) return { ok: true, text: `Loading takes ${p.loadHours} h before every cycle.` }
   if (p.unloadHours) return { ok: true, text: `Unloading takes ${p.unloadHours} h after every cycle.` }
