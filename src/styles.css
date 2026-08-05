@@ -1355,3 +1355,37 @@ input[type='file'] {
   margin: 0 0 10px;
   font-size: 14px;
 }
+
+/* Hand-adjusted planning ---------------------------------------------------- */
+.gantt-hint {
+  margin-bottom: 8px;
+}
+
+.gantt-grab {
+  cursor: grab;
+}
+
+.gantt-grab:active {
+  cursor: grabbing;
+}
+
+/* A batch the scheduler did not place. */
+.moved-dot {
+  fill: var(--text-primary);
+}
+
+/* A batch involved in a broken constraint. Outlined rather than recoloured, so
+   the phase colours underneath stay readable. */
+.gantt-violation {
+  fill: none;
+  stroke: #d1453b;
+  stroke-width: 1.5;
+  rx: 4;
+}
+
+.drag-ghost rect {
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}

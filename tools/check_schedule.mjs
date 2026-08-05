@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { defaultParams } from '../src/lib/cooling.js'
 import { planProduction, cycleTemplate, isCarbonization } from '../src/lib/schedule.js'
 import { resolvePower } from '../src/lib/power.js'
+import { validatePlan } from '../src/lib/planEdit.js'
 
 const data = JSON.parse(readFileSync(new URL('../src/data/machines.json', import.meta.url)))
 const { machines, rules } = data
@@ -28,6 +29,26 @@ const overlaps = (a, b) => a.from < b.to - EPS && b.from < a.to - EPS
 function audit(label, result, opts = {}) {
   console.log(`\n${label}`)
   const { batches } = result
+
+  // The validator behind hand-editing must agree with the scheduler. Anything
+  // the scheduler produces is legal by construction, so a violation reported
+  // here means one of the two is wrong — and checking them against each other
+  // is what stops the drag-and-drop warnings drifting away from the rules the
+  // planner actually enforces.
+  const found = validatePlan({
+    batches,
+    machines,
+    rules,
+    power: opts.resolved || null,
+    electricity: result.electricity,
+    startWipHolders: opts.startWipHolders || 0,
+    horizonHours: result.mode === 'window' ? result.horizonHours : null,
+  })
+  check(
+    'the hand-edit validator agrees this plan is legal',
+    found.length === 0,
+    found.map((v) => v.message).join('; ') || `${batches.length} batch(es) checked`,
+  )
 
   // 1. no furnace runs two batches at once
   let clash = null

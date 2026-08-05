@@ -50,10 +50,17 @@ const tickLabel = (d, step) =>
  * because it is a different kind of thing: not a sequence of batches but a plant
  * that wants to be up the whole time, and whose gaps are the interesting part.
  */
-export default function GanttChart({ result, startDate, theme, machines, coatingName = 'Coating line' }) {
+/** Dragged batches snap to this many hours. */
+const SNAP_HOURS = 0.25
+
+export default function GanttChart({
+  result, startDate, theme, machines, coatingName = 'Coating line',
+  onMoveBatch = null, violationsByBatch = null,
+}) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState(null)
   const [hoverRun, setHoverRun] = useState(null)
+  const [drag, setDrag] = useState(null)
 
   const rows = useMemo(() => {
     const order = machines.map((m) => m.id).filter((id) => result.perMachine.some((r) => r.id === id))
@@ -105,6 +112,56 @@ export default function GanttChart({ result, startDate, theme, machines, coating
   if (step < 24) {
     const first = Math.ceil((startDate.getHours() ? 24 - startDate.getHours() : 0) / 24) * 24
     for (let h = first; h <= hours; h += 24) dayLines.push(h)
+  }
+
+  /**
+   * Pointer-drag a batch along time, and between furnaces of the same stage.
+   *
+   * Rows are restricted to the same stage because a carbonization batch in a
+   * graphitization furnace is not a scheduling choice, it is a different
+   * process. Time is snapped so a drag lands on a round quarter hour rather
+   * than on whatever pixel the pointer happened to be over.
+   */
+  const beginDrag = (batch, rowIndex) => (event) => {
+    if (!onMoveBatch) return
+    event.preventDefault()
+    const svg = event.currentTarget.ownerSVGElement
+    const originX = event.clientX
+    const originY = event.clientY
+    const stage = batch.stage
+    const targets = rows
+      .map((r, i) => ({ ...r, index: i }))
+      .filter((r) => r.stage === stage)
+
+    const move = (e) => {
+      const dxHours = ((e.clientX - originX) / plotW) * hours
+      const dRows = Math.round((e.clientY - originY) / ROW)
+      const here = targets.findIndex((t) => t.index === rowIndex)
+      const target = targets[Math.min(targets.length - 1, Math.max(0, here + dRows))]
+      setDrag({
+        id: batch.id,
+        start: Math.max(0, Math.round((batch.start + dxHours) / SNAP_HOURS) * SNAP_HOURS),
+        machineId: target?.id ?? batch.machineId,
+        rowIndex: target?.index ?? rowIndex,
+      })
+    }
+    const up = (e) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      const dxHours = ((e.clientX - originX) / plotW) * hours
+      const dRows = Math.round((e.clientY - originY) / ROW)
+      const here = targets.findIndex((t) => t.index === rowIndex)
+      const target = targets[Math.min(targets.length - 1, Math.max(0, here + dRows))]
+      const start = Math.max(0, Math.round((batch.start + dxHours) / SNAP_HOURS) * SNAP_HOURS)
+      setDrag(null)
+      // A click that never moved is not an edit.
+      if (Math.abs(start - batch.start) > 1e-6 || target?.id !== batch.machineId) {
+        onMoveBatch(batch.id, { start, machineId: target?.id ?? batch.machineId })
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    svg?.focus?.()
   }
 
   if (!rows.length) return null
@@ -165,13 +222,42 @@ export default function GanttChart({ result, startDate, theme, machines, coating
                     width={Math.max(6, sx(b.end) - sx(b.start))}
                     height={ROW - 4}
                     fill="transparent"
+                    className={onMoveBatch ? 'gantt-grab' : ''}
                     onMouseEnter={() => setHover(b)}
+                    onPointerDown={beginDrag(b, i)}
                   />
+                  {b.moved && (
+                    <circle cx={sx(b.start) + 4} cy={y + (ROW - BAR) / 2 + 3} r={2.5} className="moved-dot" />
+                  )}
+                  {violationsByBatch?.[b.id] && (
+                    <rect
+                      x={sx(b.start)}
+                      y={y + (ROW - BAR) / 2 - 2}
+                      width={Math.max(4, sx(b.end) - sx(b.start))}
+                      height={BAR + 4}
+                      className="gantt-violation"
+                    />
+                  )}
                 </g>
               ))}
             </g>
           )
         })}
+
+        {drag && (() => {
+          const src = result.batches.find((b) => b.id === drag.id)
+          if (!src) return null
+          const y = PAD.top + drag.rowIndex * ROW
+          const w = Math.max(4, sx(drag.start + (src.end - src.start)) - sx(drag.start))
+          return (
+            <g className="drag-ghost" pointerEvents="none">
+              <rect x={sx(drag.start)} y={y + (ROW - BAR) / 2} width={w} height={BAR} rx={3} />
+              <text x={sx(drag.start)} y={y + (ROW - BAR) / 2 - 4} className="gantt-row-meta">
+                {Math.round(drag.start)} h
+              </text>
+            </g>
+          )
+        })()}
 
         {hasCoating && (
           <g>

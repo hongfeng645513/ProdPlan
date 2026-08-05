@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import GanttChart from './GanttChart.jsx'
 import PowerChart from './PowerChart.jsx'
 import { planProduction, isCarbonization } from '../lib/schedule.js'
 import { resolvePower } from '../lib/power.js'
+import { applyEdits, validatePlan, electricityFor, totalsFor } from '../lib/planEdit.js'
 import {
   LOAD_BANDS,
   PHASES,
@@ -155,6 +156,52 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
     // closes over are what actually matter, so key on those via machines.
   }, [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, paramsFor, resolved])
 
+  /**
+   * Hand edits, as batch id -> {start, machineId}.
+   *
+   * Held apart from the generated plan rather than folded into it, so the
+   * scheduler's answer is never lost: clearing this restores exactly what it
+   * produced. Edits are dropped whenever the inputs change, because a batch id
+   * from one plan means nothing in the next.
+   */
+  const [edits, setEdits] = useState({})
+  useEffect(() => setEdits({}), [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, resolved])
+
+  /**
+   * The plan as edited, re-checked from scratch.
+   *
+   * The scheduler cannot produce a plan that breaks a rule; a person dragging a
+   * batch certainly can. So rather than police the drag, every edited plan is
+   * revalidated and every violation named — the planner usually knows something
+   * the model does not, but should not be left to discover the consequence.
+   */
+  const view = useMemo(() => {
+    if (!result) return null
+    if (!Object.keys(edits).length) {
+      return { batches: result.batches, violations: [], electricity: result.electricity, totals: result.totals, edited: 0 }
+    }
+    const { batches, templates, edited } = applyEdits({ result, machines, rules, paramsFor, edits })
+    const electricity = resolved
+      ? electricityFor({ batches, machines, templates, resolved, horizonHours: result.horizonHours })
+      : null
+    const violations = validatePlan({
+      batches, machines, rules,
+      power: resolved,
+      electricity,
+      startWipHolders: Math.max(0, stockHolders),
+      horizonHours: mode === 'window' ? result.horizonHours : null,
+    })
+    return { batches, violations, electricity, totals: totalsFor(batches, result.horizonHours), edited: edited.length }
+  }, [result, edits, machines, rules, paramsFor, resolved, stockHolders, mode])
+
+  const violationsByBatch = useMemo(() => {
+    const map = {}
+    for (const v of view?.violations || []) for (const id of v.batchIds) map[id] = true
+    return map
+  }, [view])
+
+  const moveBatch = (id, to) => setEdits((cur) => ({ ...cur, [id]: to }))
+
   const toggle = (id) =>
     setAvailable((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   const setGroup = (pred) => setAvailable(machines.filter(pred).map((m) => m.id))
@@ -162,8 +209,8 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
   const stampFile = () => toLocalInput(startDate).replace(/[:T]/g, '-')
 
   const finishDate = result && startDate ? dateAt(startDate, result.finishHours) : null
-  const shownBatches = result ? (showAll ? result.batches : result.batches.slice(0, 25)) : []
-  const power = result?.electricity || null
+  const shownBatches = view ? (showAll ? view.batches : view.batches.slice(0, 25)) : []
+  const power = view?.electricity || null
   const shownHours = power ? (showAllHours ? power.hourly : power.hourly.slice(0, 48)) : []
   const headroom = power && Number.isFinite(power.cap) ? power.cap - power.peak : null
 
@@ -457,13 +504,41 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
                   )}
                 </ul>
               </div>
+              <p className="hint gantt-hint">
+                Drag a batch to move it in time, or onto another furnace of the same stage. The plan
+                is re-checked after every move and anything it breaks is listed below.
+              </p>
+
               <GanttChart
-                result={result}
+                result={{ ...result, batches: view.batches, electricity: view.electricity }}
                 startDate={startDate}
                 theme={theme}
                 machines={machines}
                 coatingName={resolved?.coating.name}
+                onMoveBatch={moveBatch}
+                violationsByBatch={violationsByBatch}
               />
+
+              {view.edited > 0 && (
+                <div className={view.violations.length ? 'notice notice-error' : 'notice notice-ok'}>
+                  <strong>
+                    {view.edited} batch(es) moved by hand
+                    {view.violations.length
+                      ? ` — ${view.violations.length} constraint(s) broken:`
+                      : ' — the plan still obeys every constraint.'}
+                  </strong>
+                  {view.violations.length > 0 && (
+                    <ul className="notice-list">
+                      {view.violations.map((v, i) => <li key={i}>{v.message}</li>)}
+                    </ul>
+                  )}
+                  <div className="edit-actions">
+                    <button className="btn btn-sm" onClick={() => setEdits({})}>
+                      Undo all moves
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="table-wrap">
                 <table>
