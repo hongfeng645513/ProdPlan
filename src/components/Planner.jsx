@@ -4,6 +4,7 @@ import PowerChart from './PowerChart.jsx'
 import { planProduction, isCarbonization } from '../lib/schedule.js'
 import { resolvePower } from '../lib/power.js'
 import { applyEdits, validatePlan, electricityFor, totalsFor } from '../lib/planEdit.js'
+import { parseTempRules, mergeRules, describeRule } from '../lib/tempRules.js'
 import {
   LOAD_BANDS,
   PHASES,
@@ -125,6 +126,33 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
   const horizonHours = startDate && endDate ? (endDate - startDate) / 3600_000 : 0
   const windowValid = mode !== 'window' || horizonHours > 0
 
+  /**
+   * Extra rules for this session only.
+   *
+   * Kept in sessionStorage rather than the database: they exist for what is
+   * true this week and not next — an engineer on site Tuesday, a furnace down
+   * for a liner change. Writing them to the Rules sheet would mean remembering
+   * to take them out again, and a stale constraint is worse than no constraint
+   * because it silently shapes every plan afterwards.
+   */
+  const [tempText, setTempText] = useState(() => {
+    try {
+      return sessionStorage.getItem('prodplan.tempRules') || ''
+    } catch {
+      return ''
+    }
+  })
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('prodplan.tempRules', tempText)
+    } catch {
+      /* storage unavailable — the rules simply live in memory */
+    }
+  }, [tempText])
+
+  const temp = useMemo(() => parseTempRules(tempText), [tempText])
+  const activeRules = useMemo(() => mergeRules(rules, temp), [rules, temp])
+
   const resolved = useMemo(
     () =>
       powerData
@@ -142,7 +170,7 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
     if (!startDate || !windowValid) return null
     return planProduction({
       machines,
-      rules,
+      rules: activeRules,
       availableIds: available,
       paramsFor,
       mode,
@@ -154,7 +182,7 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
     })
     // paramsFor is rebuilt on every render by App; the cooling overrides it
     // closes over are what actually matter, so key on those via machines.
-  }, [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, paramsFor, resolved])
+  }, [machines, activeRules, available, mode, horizonHours, targetKg, stockHolders, startText, paramsFor, resolved])
 
   /**
    * Hand edits, as batch id -> {start, machineId}.
@@ -165,7 +193,7 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
    * from one plan means nothing in the next.
    */
   const [edits, setEdits] = useState({})
-  useEffect(() => setEdits({}), [machines, rules, available, mode, horizonHours, targetKg, stockHolders, startText, resolved])
+  useEffect(() => setEdits({}), [machines, activeRules, available, mode, horizonHours, targetKg, stockHolders, startText, resolved])
 
   /**
    * The plan as edited, re-checked from scratch.
@@ -180,19 +208,19 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
     if (!Object.keys(edits).length) {
       return { batches: result.batches, violations: [], electricity: result.electricity, totals: result.totals, edited: 0 }
     }
-    const { batches, templates, edited } = applyEdits({ result, machines, rules, paramsFor, edits })
+    const { batches, templates, edited } = applyEdits({ result, machines, rules: activeRules, paramsFor, edits })
     const electricity = resolved
       ? electricityFor({ batches, machines, templates, resolved, horizonHours: result.horizonHours })
       : null
     const violations = validatePlan({
-      batches, machines, rules,
+      batches, machines, rules: activeRules,
       power: resolved,
       electricity,
       startWipHolders: Math.max(0, stockHolders),
       horizonHours: mode === 'window' ? result.horizonHours : null,
     })
     return { batches, violations, electricity, totals: totalsFor(batches, result.horizonHours), edited: edited.length }
-  }, [result, edits, machines, rules, paramsFor, resolved, stockHolders, mode])
+  }, [result, edits, machines, activeRules, paramsFor, resolved, stockHolders, mode])
 
   const violationsByBatch = useMemo(() => {
     const map = {}
@@ -305,6 +333,37 @@ export default function Planner({ machines, rules, power: powerData, paramsFor, 
             Material already carbonized and waiting. Graphitization can start on this immediately
             instead of waiting for the first carbonization batch.
           </p>
+        </div>
+
+        <div className="control-block temp-rules">
+          <label htmlFor="plan-temp-rules">Temporary rules for this session</label>
+          <textarea
+            id="plan-temp-rules"
+            rows={3}
+            value={tempText}
+            onChange={(e) => setTempText(e.target.value)}
+            placeholder="Furnace 3 and Furnace 4 cannot heat at the same time; It takes two hours to load a furnace before heating"
+          />
+          <p className="control-hint">
+            Written the same way as the stored rules, separated by <code>;</code>, a new line, or
+            <code>,</code>. They apply to this plan only and are never saved — a rule that outlives
+            the reason for it shapes every plan afterwards without anyone noticing.
+          </p>
+
+          {temp.raw.length > 0 && (
+            <ul className="temp-rule-list">
+              {temp.raw.map((r, i) => {
+                const d = describeRule(r.text, machines)
+                return (
+                  <li key={i} className={d.ok ? '' : 'warn-cell'}>
+                    <strong>{r.text}</strong>
+                    <br />
+                    {d.text}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </div>
 
         {powerData && (

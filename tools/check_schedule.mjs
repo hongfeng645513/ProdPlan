@@ -12,6 +12,7 @@ import { defaultParams } from '../src/lib/cooling.js'
 import { planProduction, cycleTemplate, isCarbonization } from '../src/lib/schedule.js'
 import { resolvePower } from '../src/lib/power.js'
 import { validatePlan } from '../src/lib/planEdit.js'
+import { splitRuleText, parseTempRules, mergeRules } from '../src/lib/tempRules.js'
 
 const data = JSON.parse(readFileSync(new URL('../src/data/machines.json', import.meta.url)))
 const { machines, rules } = data
@@ -140,6 +141,75 @@ for (const m of machines) {
 }
 
 const week = planProduction({ machines, rules, availableIds: ALL, mode: 'window', horizonHours: 24 * 7 })
+// --- temporary rules ------------------------------------------------------
+//
+// Commas are the whole difficulty here. Existing rules contain them, so
+// splitting blindly destroys a rule; but two rules joined by one parse as a
+// single rule naming four furnaces, which is silently wrong rather than
+// rejected. The splitter therefore only splits when doing so makes every part
+// parse — the parser being the arbiter means it cannot disagree with what the
+// planner enforces.
+console.log('\nG. temporary rules')
+{
+  const commaRule = 'Cooling system 1 need to run during both heating and cooling for furnace 1, furnace 2 and furnace 3'
+  check('a rule containing commas is not torn apart',
+    splitRuleText(commaRule).length === 1, JSON.stringify(splitRuleText(commaRule)))
+
+  const two = 'Furnace 1 and Furnace 2 cannot heat at the same time, Furnace 3 and Furnace 4 cannot heat at the same time'
+  const split = splitRuleText(two)
+  check('two rules joined by a comma are separated', split.length === 2, JSON.stringify(split))
+  check('and are not merged into one four-furnace group',
+    parseTempRules(two).exclusiveHeating.every((g) => g.machines.length === 2),
+    JSON.stringify(parseTempRules(two).exclusiveHeating.map((g) => g.machines)))
+
+  check('semicolons separate',
+    splitRuleText('Furnace 1 and Furnace 2 cannot heat at the same time; Furnace 5 and Furnace 6 cannot heat at the same time').length === 2)
+  check('newlines separate',
+    splitRuleText(
+      ['Furnace 1 and Furnace 2 cannot heat at the same time',
+       'Furnace 5 and Furnace 6 cannot heat at the same time'].join('\n'),
+    ).length === 2)
+  check('blank input yields nothing', splitRuleText('   ').length === 0)
+
+  const merged = mergeRules(rules, parseTempRules('Furnace 3 and Furnace 4 cannot heat at the same time'))
+  check('a temporary rule adds to the stored ones rather than replacing them',
+    merged.exclusiveHeating.length === rules.exclusiveHeating.length + 1,
+    `${rules.exclusiveHeating.length} -> ${merged.exclusiveHeating.length}`)
+  check('stored load and unload times survive a temporary rule that does not mention them',
+    merged.loadHours === rules.loadHours && merged.unloadHours === rules.unloadHours,
+    `load ${merged.loadHours} h, unload ${merged.unloadHours} h`)
+  check('an unreadable temporary rule is reported, not silently dropped',
+    parseTempRules('please be careful with furnace 3').unparsed.length === 1)
+
+  // The point of all this: the extra constraint must actually bind.
+  const before = planProduction({ machines, rules, availableIds: ALL, paramsFor: defaultParams, mode: 'window', horizonHours: 24 * 14 })
+  const after = planProduction({ machines, rules: merged, availableIds: ALL, paramsFor: defaultParams, mode: 'window', horizonHours: 24 * 14 })
+  const heatsTogether = (plan) => {
+    const a = plan.batches.filter((b) => b.machineId === 'furnace-3')
+    const b2 = plan.batches.filter((b) => b.machineId === 'furnace-4')
+    for (const x of a)
+      for (const y of b2)
+        if (x.powerFrom < y.powerTo - EPS && y.powerFrom < x.powerTo - EPS) return true
+    return false
+  }
+
+  // The rule has to bite, or enforcing it proves nothing: without it, F3 and F4
+  // must actually overlap.
+  check('without the temporary rule, F3 and F4 do heat together',
+    heatsTogether(before), `${before.batches.length} batch(es)`)
+  check('with it, they never do',
+    !heatsTogether(after), `${after.batches.length} batch(es)`)
+
+  // Batch COUNT is deliberately not asserted. Scheduling is greedy, so an extra
+  // constraint changes the tie-breaking and can pack better by accident — this
+  // pair goes from 25 batches to 26. Fewer degrees of freedom does not mean less
+  // output, and asserting otherwise tests a property the scheduler never had.
+  check('the plan is genuinely rebuilt, not reused',
+    JSON.stringify(before.batches.map((b) => [b.machineId, b.start])) !==
+      JSON.stringify(after.batches.map((b) => [b.machineId, b.start])),
+    `${before.batches.length} -> ${after.batches.length} batches`)
+}
+
 audit('A. one week, all six furnaces', week)
 console.log(
   `   -> ${(week.totals.gfGrams / 1000).toFixed(2)} kg GF, ${week.totals.batches} batches ` +

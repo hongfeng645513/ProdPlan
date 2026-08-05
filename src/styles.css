@@ -1389,3 +1389,40 @@ input[type='file'] {
   stroke-width: 1.5;
   stroke-dasharray: 3 2;
 }
+
+/* Temporary planning rules -------------------------------------------------- */
+.temp-rules textarea {
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  color: var(--text-primary);
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--plane);
+  resize: vertical;
+}
+
+.temp-rule-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.temp-rule-list li {
+  border-left: 3px solid #2a78d6;
+  background: var(--band-cool);
+  border-radius: 0 6px 6px 0;
+  padding: 6px 10px;
+}
+
+/* A sentence the parser could not read is listed but NOT applied. */
+.temp-rule-list li.warn-cell {
+  border-left-color: #eda100;
+  background: var(--band-hold);
+}
